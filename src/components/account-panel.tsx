@@ -138,7 +138,9 @@ export function AccountPanel({
         <DialogHeader>
           <DialogTitle>
             {connectionId
-              ? providerLabel(profile?.provider ?? "")
+              ? profile
+                ? providerLabel(profile.provider)
+                : "账户信息"
               : "KunCode 账户"}
           </DialogTitle>
           <DialogDescription>
