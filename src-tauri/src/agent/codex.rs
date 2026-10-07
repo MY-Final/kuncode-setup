@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use serde_json::json;
 
-use super::model::{mask_api_key, AgentConfig, ConfigPreview, TestResult};
+use super::model::{mask_api_key, AgentConfig, ConfigPreview};
 use super::provider::AgentProvider;
-use crate::config::{backup_file, ensure_parent};
+use crate::config::{atomic_write, backup_file};
 use crate::env::{detect_cli, ToolStatus};
 use crate::error::AppResult;
 
@@ -71,6 +71,9 @@ impl AgentProvider for CodexProvider {
     }
 
     fn backup(&self) -> AppResult<Option<PathBuf>> {
+        if let Some(dir) = self.home_dir() {
+            backup_file(&dir.join("auth.json"))?;
+        }
         match self.config_path() {
             Some(path) => backup_file(&path),
             None => Ok(None),
@@ -81,37 +84,87 @@ impl AgentProvider for CodexProvider {
         let dir = self
             .home_dir()
             .ok_or_else(|| crate::error::AppError::Other("无法定位用户主目录".into()))?;
-        let config_path = dir.join("config.toml");
-
-        let body = format!(
-            "# 由 KunCode Setup 自动生成 / 更新\n\
-             model = \"{model}\"\n\
-             model_provider = \"kuncode\"\n\n\
-             [model_providers.kuncode]\n\
-             name = \"KunCode\"\n\
-             base_url = \"{base_url}\"\n\
-             env_key = \"OPENAI_API_KEY\"\n\
-             wire_api = \"chat\"\n",
-            model = config.model,
-            base_url = config.base_url,
-        );
-
-        ensure_parent(&config_path)?;
-        std::fs::write(&config_path, body)?;
-
-        // 将 API Key 写入 Codex 的凭据文件，权限交由系统。
-        let auth_path = dir.join("auth.json");
-        let auth = json!({ "OPENAI_API_KEY": config.api_key });
-        std::fs::write(&auth_path, serde_json::to_string_pretty(&auth)?)?;
-
-        Ok(())
+        write_configuration(&dir, config)
     }
 
-    fn test(&self, config: &AgentConfig) -> TestResult {
-        crate::agent::http_test::probe(&config.base_url, &config.api_key, &config.model)
+    fn configuration_paths(&self) -> Vec<PathBuf> {
+        self.home_dir()
+            .map(|dir| vec![dir.join("config.toml"), dir.join("auth.json")])
+            .unwrap_or_default()
+    }
+
+    fn configuration_matches(&self, config: &AgentConfig) -> AppResult<bool> {
+        let Some(dir) = self.home_dir() else {
+            return Ok(false);
+        };
+        let value: toml::Value = match std::fs::read_to_string(dir.join("config.toml")) {
+            Ok(text) => match toml::from_str(&text) {
+                Ok(value) => value,
+                Err(_) => return Ok(false),
+            },
+            Err(_) => return Ok(false),
+        };
+        let auth: serde_json::Value = match std::fs::read(dir.join("auth.json")) {
+            Ok(body) => match serde_json::from_slice(&body) {
+                Ok(value) => value,
+                Err(_) => return Ok(false),
+            },
+            Err(_) => return Ok(false),
+        };
+        Ok(
+            value.get("model").and_then(toml::Value::as_str) == Some(&config.model)
+                && value.get("model_provider").and_then(toml::Value::as_str) == Some("kuncode")
+                && value
+                    .get("model_providers")
+                    .and_then(|providers| providers.get("kuncode"))
+                    .and_then(|provider| provider.get("base_url"))
+                    .and_then(toml::Value::as_str)
+                    == Some(&config.base_url)
+                && auth
+                    .get("OPENAI_API_KEY")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(&config.api_key),
+        )
     }
 
     fn launch(&self) -> AppResult<String> {
         crate::agent::launch::spawn("codex", &[])
     }
+}
+
+pub(super) fn write_configuration(dir: &std::path::Path, config: &AgentConfig) -> AppResult<()> {
+    let path = dir.join("config.toml");
+    let mut value: toml::Value = match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            toml::from_str(&text).unwrap_or_else(|_| toml::Value::Table(Default::default()))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            toml::Value::Table(Default::default())
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let table = value
+        .as_table_mut()
+        .ok_or_else(|| crate::error::AppError::Parse("Codex 配置不是对象".into()))?;
+    table.insert("model".into(), config.model.clone().into());
+    table.insert("model_provider".into(), "kuncode".into());
+    let providers = table
+        .entry("model_providers")
+        .or_insert_with(|| toml::Value::Table(Default::default()));
+    let providers = providers
+        .as_table_mut()
+        .ok_or_else(|| crate::error::AppError::Parse("Codex Provider 配置损坏".into()))?;
+    let mut provider = toml::Table::new();
+    provider.insert("name".into(), "KunCode".into());
+    provider.insert("base_url".into(), config.base_url.clone().into());
+    provider.insert("wire_api".into(), "responses".into());
+    provider.insert("requires_openai_auth".into(), true.into());
+    providers.insert("kuncode".into(), toml::Value::Table(provider));
+    let body = toml::to_string_pretty(&value)
+        .map_err(|_| crate::error::AppError::Parse("无法生成 Codex 配置".into()))?;
+    atomic_write(&path, &body)?;
+    atomic_write(
+        &dir.join("auth.json"),
+        &serde_json::to_string_pretty(&json!({ "OPENAI_API_KEY": config.api_key }))?,
+    )
 }

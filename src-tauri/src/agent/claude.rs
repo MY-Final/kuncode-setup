@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use super::model::{mask_api_key, AgentConfig, ConfigPreview, TestResult};
+use super::model::{mask_api_key, AgentConfig, ConfigPreview};
 use super::provider::AgentProvider;
-use crate::config::{backup_file, ensure_parent};
+use crate::config::{atomic_write, backup_file};
 use crate::env::{detect_cli, ToolStatus};
 use crate::error::AppResult;
 
@@ -80,43 +80,65 @@ impl AgentProvider for ClaudeCodeProvider {
             .config_path()
             .ok_or_else(|| crate::error::AppError::Other("无法定位用户主目录".into()))?;
 
-        // 合并已有 settings.json，避免覆盖用户其它设置。
-        let mut value: serde_json::Value = match std::fs::read_to_string(&path) {
-            Ok(text) if !text.trim().is_empty() => {
-                serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({}))
-            }
-            _ => serde_json::json!({}),
-        };
-
-        let obj = value
-            .as_object_mut()
-            .ok_or_else(|| crate::error::AppError::Parse("settings.json 不是对象".into()))?;
-
-        let env = obj.entry("env").or_insert_with(|| serde_json::json!({}));
-        if !env.is_object() {
-            *env = serde_json::json!({});
-        }
-        let env = env.as_object_mut().unwrap();
-        env.insert(
-            "ANTHROPIC_BASE_URL".into(),
-            serde_json::json!(config.base_url),
-        );
-        env.insert(
-            "ANTHROPIC_AUTH_TOKEN".into(),
-            serde_json::json!(config.api_key),
-        );
-        env.insert("ANTHROPIC_MODEL".into(), serde_json::json!(config.model));
-
-        ensure_parent(&path)?;
-        std::fs::write(&path, serde_json::to_string_pretty(&value)?)?;
-        Ok(())
+        write_configuration(&path, config)
     }
 
-    fn test(&self, config: &AgentConfig) -> TestResult {
-        crate::agent::http_test::probe(&config.base_url, &config.api_key, &config.model)
+    fn configuration_matches(&self, config: &AgentConfig) -> AppResult<bool> {
+        let Some(path) = self.config_path() else {
+            return Ok(false);
+        };
+        let value: serde_json::Value = match std::fs::read(path) {
+            Ok(body) => match serde_json::from_slice(&body) {
+                Ok(value) => value,
+                Err(_) => return Ok(false),
+            },
+            Err(_) => return Ok(false),
+        };
+        Ok(value
+            .pointer("/env/ANTHROPIC_BASE_URL")
+            .and_then(serde_json::Value::as_str)
+            == Some(&config.base_url)
+            && value
+                .pointer("/env/ANTHROPIC_AUTH_TOKEN")
+                .and_then(serde_json::Value::as_str)
+                == Some(&config.api_key)
+            && value
+                .pointer("/env/ANTHROPIC_MODEL")
+                .and_then(serde_json::Value::as_str)
+                == Some(&config.model))
     }
 
     fn launch(&self) -> AppResult<String> {
         crate::agent::launch::spawn("claude", &[])
     }
+}
+
+pub(super) fn write_configuration(path: &std::path::Path, config: &AgentConfig) -> AppResult<()> {
+    let mut value: serde_json::Value = match std::fs::read_to_string(path) {
+        Ok(text) if !text.trim().is_empty() => {
+            serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({}))
+        }
+        _ => serde_json::json!({}),
+    };
+
+    let obj = value
+        .as_object_mut()
+        .ok_or_else(|| crate::error::AppError::Parse("settings.json 不是对象".into()))?;
+
+    let env = obj.entry("env").or_insert_with(|| serde_json::json!({}));
+    if !env.is_object() {
+        *env = serde_json::json!({});
+    }
+    let env = env.as_object_mut().unwrap();
+    env.insert(
+        "ANTHROPIC_BASE_URL".into(),
+        serde_json::json!(config.base_url),
+    );
+    env.insert(
+        "ANTHROPIC_AUTH_TOKEN".into(),
+        serde_json::json!(config.api_key),
+    );
+    env.insert("ANTHROPIC_MODEL".into(), serde_json::json!(config.model));
+
+    atomic_write(path, &serde_json::to_string_pretty(&value)?)
 }

@@ -4,284 +4,239 @@ import { ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { SetupStepper } from "@/components/setup/stepper";
 import { ConfigurationPreview } from "@/components/setup/config-preview";
+import { ConnectionDialog } from "@/components/connection-dialog";
 import {
   OperationDialog,
   type OperationState,
-  type OperationStep,
 } from "@/components/operation-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useApp } from "@/lib/store";
-import { useAgentLaunch } from "@/lib/use-agent-launch";
 import * as api from "@/lib/tauri/api";
-import {
-  DEFAULT_MODEL,
-  DEFAULT_BASE_URL,
-  DEMO_MODELS,
-} from "@/lib/data/models";
-import type { AgentConfig, ConfigPreview, StepResult } from "@/lib/types";
+import { DEMO_MODELS, DEFAULT_BASE_URL } from "@/lib/data/models";
+import type { ConfigPreview, ConnectionStep } from "@/lib/types";
 import { cn, errorMessage } from "@/lib/utils";
-type Stage = "connect" | "model" | "preview";
-const executionLabels = [
-  "检查工具",
-  "备份设置",
-  "保存配置",
-  "测试 KunCode 连接",
-];
 
+type Stage = "connect" | "model" | "preview";
+const labels = [
+  "检查环境",
+  "准备工具凭据",
+  "备份原配置",
+  "写入配置",
+  "检查服务连接",
+];
 export default function SetupPage() {
   const { agent: agentId = "codex" } = useParams();
   const {
     agents,
     loading,
-    login,
     draft,
     setDraft,
+    connections,
     configurations,
+    refreshConnections,
     recordConfiguration,
   } = useApp();
   const agent = agents.find((item) => item.id === agentId);
-  const matchingDraft = draft?.agentId === agentId ? draft : null;
-  const canReuseConnection =
-    !!matchingDraft &&
-    (configurations[agentId]?.demo || !!matchingDraft.apiKey);
-  const [stage, setStage] = useState<Stage>(
-    canReuseConnection ? "model" : "connect",
+  const config = configurations[agentId];
+  const [connectionId, setConnectionId] = useState(
+    (draft?.agentId === agentId ? draft.connectionId : config?.connectionId) ??
+      "",
   );
-  const [demo, setDemo] = useState(
-    !canReuseConnection || !matchingDraft?.apiKey,
-  );
-  const [model, setModel] = useState(
-    matchingDraft?.model ?? configurations[agentId]?.model ?? DEFAULT_MODEL,
-  );
-  const [baseUrl, setBaseUrl] = useState(
-    matchingDraft?.baseUrl ?? DEFAULT_BASE_URL,
-  );
-  const [apiKey, setApiKey] = useState(matchingDraft?.apiKey ?? "");
+  const [stage, setStage] = useState<Stage>("connect");
+  const [demo, setDemo] = useState(false);
+  const [model, setModel] = useState(config?.model ?? "");
+  const [models, setModels] = useState<string[]>([]);
+  const [modelLoading, setModelLoading] = useState(false);
+  const [manualModel, setManualModel] = useState(false);
+  const [modelNotice, setModelNotice] = useState<string | null>(null);
+  const [connectOpen, setConnectOpen] = useState(false);
   const [preview, setPreview] = useState<ConfigPreview | null>(null);
   const [operation, setOperation] = useState<OperationState | null>(null);
-  const [results, setResults] = useState<StepResult[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const applying = useRef(false);
-  const launcher = useAgentLaunch();
   const navigate = useNavigate();
-  const config: AgentConfig = {
-    agentId,
-    model: model.trim(),
-    baseUrl: baseUrl.trim().replace(/\/+$/, ""),
-    apiKey: demo ? "" : apiKey.trim(),
-  };
+  const selected = connections.find(
+    (connection) => connection.id === connectionId,
+  );
   useEffect(() => {
     document.getElementById("main-content")?.scrollTo(0, 0);
   }, [stage]);
-  function safeError(value: unknown) {
-    const message = errorMessage(value);
-    return apiKey.trim()
-      ? message.split(apiKey.trim()).join("[凭据已隐藏]")
-      : message;
-  }
-  function connect(event: FormEvent) {
-    event.preventDefault();
+  useEffect(() => {
+    if (stage !== "model" || demo || !connectionId) return;
+    let active = true;
+    setModelLoading(true);
     setError(null);
-    if (!config.apiKey) {
-      setError("请填写账户连接凭据。");
-      return;
-    }
-    try {
-      const url = new URL(config.baseUrl);
-      if (
-        !["http:", "https:"].includes(url.protocol) ||
-        url.username ||
-        url.password
-      )
-        throw new Error();
-    } catch {
-      setError("服务地址无效，请检查后再试。");
-      return;
-    }
-    setDemo(false);
-    setStage("model");
-  }
+    setModels([]);
+    setManualModel(false);
+    setModelNotice(null);
+    api
+      .connectionModels(connectionId)
+      .then((values) => {
+        if (!active) return;
+        setModels(values);
+        setModel((previous) =>
+          values.includes(previous) ? previous : (values[0] ?? ""),
+        );
+        if (!values.length)
+          setModelNotice("此连接没有可用模型，请检查站点权限。");
+      })
+      .catch((value: unknown) => {
+        if (!active) return;
+        if (
+          selected?.kind === "api_key" &&
+          typeof value === "object" &&
+          value !== null &&
+          "kind" in value &&
+          value.kind === "unsupported"
+        ) {
+          setManualModel(true);
+          setModelNotice(
+            "站点不提供模型列表，可以填写模型 ID；此连接尚未验证。",
+          );
+        } else setError(errorMessage(value));
+      })
+      .finally(() => {
+        if (active) setModelLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [stage, demo, connectionId, selected?.kind]);
   async function handlePreview(event: FormEvent) {
     event.preventDefault();
-    setError(null);
-    if (!config.model) {
-      setError("请选择模型。");
-      return;
-    }
+    if (busy || !model.trim()) return;
     setBusy(true);
+    setError(null);
     try {
-      setPreview(await api.previewConfig(config, demo));
-      setDraft(config);
+      const result = demo
+        ? await api.previewConfig(
+            {
+              agentId,
+              model: model.trim(),
+              baseUrl: DEFAULT_BASE_URL,
+              apiKey: "",
+            },
+            true,
+          )
+        : await api.previewConnection(connectionId, agentId, model.trim());
+      setPreview(result);
+      setDraft({ agentId, model: model.trim(), connectionId, demo });
       setStage("preview");
-    } catch (e) {
-      setError(safeError(e));
+    } catch (value) {
+      setError(errorMessage(value));
     } finally {
       setBusy(false);
     }
   }
-  function resultSteps(values: StepResult[], running = false): OperationStep[] {
-    return executionLabels.map((label, index) => ({
-      label: index === 0 ? `检查 ${agent?.name ?? "工具"}` : label,
-      status: values[index]
-        ? values[index].ok
-          ? "complete"
-          : "error"
-        : running && index === values.length
-          ? "running"
-          : "waiting",
-    }));
-  }
   async function apply() {
     if (applying.current || (!demo && !agent?.installed)) return;
     applying.current = true;
-    setResults([]);
-    setError(null);
     const state: OperationState = {
       title: `正在配置 ${agent?.name}`,
       description: demo
         ? "演示配置，不会修改本机文件。"
-        : "程序会自动备份、保存设置并检查连接。",
+        : "自动备份、保存配置并检查模型列表，不执行付费推理。",
       phase: "running",
-      steps: resultSteps([], true),
+      steps: [],
     };
-    setOperation(state);
-    const partial: StepResult[] = [];
+    const partial: ConnectionStep[] = [];
+    const update = (running: boolean) =>
+      labels.map((label) => ({
+        label,
+        status:
+          partial.find((step) => step.step === label)?.status ??
+          (running && labels.indexOf(label) === partial.length
+            ? ("running" as const)
+            : ("waiting" as const)),
+      }));
+    setOperation({ ...state, steps: update(true) });
     try {
-      const values = await api.applyConfig(config, demo, (step) => {
-        partial.push(step);
+      if (demo) {
+        const values = await api.applyConfig(
+          { agentId, model, baseUrl: DEFAULT_BASE_URL, apiKey: "" },
+          true,
+        );
+        if (!values.every((step) => step.ok)) throw new Error("演示配置未完成");
+        recordConfiguration(agentId, model, true);
         setOperation({
           ...state,
-          steps: resultSteps(partial, true),
-          progress: (partial.length / 4) * 100,
+          title: "演示配置完成",
+          description: "未修改本机配置，也未连接真实站点。",
+          phase: "success",
+          steps: labels.map((label) => ({ label, status: "complete" })),
+          progress: 100,
         });
-      });
-      setResults(values);
-      const success = values.length > 0 && values.every((step) => step.ok);
-      recordConfiguration(
-        agentId,
-        config.model,
-        demo,
-        success ? "ready" : "error",
-      );
-      setOperation({
-        ...state,
-        title: success ? `${agent?.name} 配置完成` : "配置未完成",
-        description: success
-          ? demo
-            ? "演示已完成，可以继续体验启动。"
-            : "配置已保存，可以启动工具了。"
-          : "请检查连接后重试。",
-        phase: success ? "success" : "error",
-        steps: resultSteps(values),
-        progress: (values.length / 4) * 100,
-        error: success
-          ? undefined
-          : values.find((step) => !step.ok)?.detail
-            ? safeError(values.find((step) => !step.ok)!.detail)
-            : "请到系统诊断检查工具与连接状态。",
-      });
-    } catch (e) {
-      recordConfiguration(agentId, config.model, demo, "error");
+      } else {
+        const outcome = await api.applyConnection(
+          connectionId,
+          agentId,
+          model,
+          (step) => {
+            partial.push(step);
+            setOperation({
+              ...state,
+              steps: update(true),
+              progress: (partial.length / labels.length) * 100,
+            });
+          },
+        );
+        await refreshConnections();
+        const success = outcome.binding.status === "ready";
+        const warning = outcome.steps.find(
+          (step) => step.status === "warning",
+        )?.detail;
+        setOperation({
+          ...state,
+          title: success ? `${agent?.name} 配置完成` : "工具密钥未通过检查",
+          description:
+            warning ??
+            (success
+              ? "配置已保存，可以启动工具。模型列表检查不代表实际推理成功。"
+              : "请检查密钥并修复配置。"),
+          phase: success ? "success" : "error",
+          steps: update(false),
+          progress: 100,
+          error:
+            outcome.steps.find((step) => step.status === "error")?.detail ??
+            undefined,
+        });
+      }
+    } catch (value) {
       setOperation({
         ...state,
         title: "配置未完成",
         phase: "error",
-        steps: resultSteps(partial),
-        progress: (partial.length / 4) * 100,
-        error: safeError(e),
+        steps: update(false),
+        error: errorMessage(value),
       });
     } finally {
       applying.current = false;
     }
-  }
-  async function retest() {
-    if (applying.current) return;
-    applying.current = true;
-    const state: OperationState = {
-      title: "正在检查 KunCode 连接",
-      description: demo
-        ? "演示测试，不会发送真实请求。"
-        : "请稍候，正在验证连接。",
-      phase: "running",
-      steps: [{ label: "测试 KunCode 连接", status: "running" }],
-    };
-    setOperation(state);
-    try {
-      const value = await api.testConnection(config, demo);
-      const updated = [
-        ...results.filter((step) => step.step !== "测试连接"),
-        { step: "测试连接", ok: value.ok, detail: value.message },
-      ];
-      setResults(updated);
-      const ready = updated.every((step) => step.ok);
-      recordConfiguration(
-        agentId,
-        config.model,
-        demo,
-        ready ? "ready" : "error",
-      );
-      setOperation({
-        ...state,
-        title: ready ? "连接检查通过" : "连接未通过",
-        description: ready ? "现在可以启动工具了。" : "请修复连接后重试。",
-        phase: ready ? "success" : "error",
-        steps: [
-          {
-            label: "测试 KunCode 连接",
-            status: value.ok ? "complete" : "error",
-          },
-        ],
-        progress: 100,
-        error: value.ok ? undefined : safeError(value.message),
-      });
-    } catch (e) {
-      setOperation({
-        ...state,
-        title: "连接未通过",
-        phase: "error",
-        steps: [{ label: "测试 KunCode 连接", status: "error" }],
-        progress: 0,
-        error: safeError(e),
-      });
-    } finally {
-      applying.current = false;
-    }
-  }
-  function closeOperation() {
-    const completed = operation?.phase === "success";
-    setOperation(null);
-    if (completed) navigate("/");
-  }
-  function launchConfigured() {
-    if (!agent) return;
-    setOperation(null);
-    void launcher.launch(agent);
   }
   if (!agent)
-    return (
-      <>
-        <PageHeader title={loading ? "正在准备工具…" : "未找到这个工具"} />
-        <Button variant="outline" onClick={() => navigate("/")}>
-          <ArrowLeft />
-          返回首页
-        </Button>
-      </>
-    );
+    return <PageHeader title={loading ? "正在准备工具…" : "未找到这个工具"} />;
+  const options = demo
+    ? DEMO_MODELS.map((item) => ({
+        id: item.id,
+        name: item.name,
+        description: item.description,
+      }))
+    : models.map((id) => ({ id, name: id, description: "站点提供的模型" }));
   return (
     <>
       <button
         type="button"
         className="flow-back"
+        disabled={busy || applying.current}
         onClick={() => {
           setError(null);
           if (stage === "connect") navigate("/");
           else setStage(stage === "preview" ? "model" : "connect");
         }}
-        disabled={busy}
       >
         <ArrowLeft />
         返回
@@ -296,10 +251,10 @@ export default function SetupPage() {
         }
         description={
           stage === "connect"
-            ? "连接账户，然后选择模型。"
+            ? "选择站点连接，其他配置交给程序。"
             : stage === "model"
-              ? "选择适合你的模型，其他设置交给程序。"
-              : "确认后即可自动配置工具。"
+              ? "选择这个站点提供的模型。"
+              : "确认后开始检查环境、创建工具凭据并保存配置。"
         }
       />
       <div className="setup-container">
@@ -313,123 +268,164 @@ export default function SetupPage() {
         )}
         {stage === "connect" && (
           <section className="connection-section">
-            <h2>连接 KunCode</h2>
-            <p>账户登录服务暂未接入，你可以先体验配置流程。</p>
-            <Button variant="outline" disabled>
-              登录 KunCode
-            </Button>
+            <h2>连接站点</h2>
+            <p>每个工具可以使用不同站点，切换账户会保留已有工具配置。</p>
+            {connections.length > 0 && (
+              <RadioGroup
+                aria-label="选择站点连接"
+                value={connectionId}
+                onValueChange={(id) => {
+                  setConnectionId(id);
+                  setDemo(false);
+                }}
+                className="connection-list"
+              >
+                {connections.map((connection) => (
+                  <label
+                    key={connection.id}
+                    className="model-row"
+                    htmlFor={`connection-${connection.id}`}
+                  >
+                    <RadioGroupItem
+                      id={`connection-${connection.id}`}
+                      value={connection.id}
+                      disabled={!connection.connected}
+                    />
+                    <span className="model-copy">
+                      <strong>
+                        {connection.account ?? new URL(connection.siteUrl).host}
+                      </strong>
+                      <span>
+                        {connection.kind === "api_key"
+                          ? "API Key 服务连接"
+                          : connection.kind === "kuncode_authorized"
+                            ? "KunCode 浏览器授权"
+                            : "用户 Token 连接"}{" "}
+                        ·{" "}
+                        {connection.connected
+                          ? connection.verified
+                            ? "已连接"
+                            : "尚未验证"
+                          : "需要重新连接"}
+                      </span>
+                      <span>{connection.siteUrl}</span>
+                    </span>
+                  </label>
+                ))}
+              </RadioGroup>
+            )}
+            <div className="connection-entry">
+              <Button onClick={() => setConnectOpen(true)}>
+                {connections.some((connection) => connection.connected)
+                  ? "添加站点连接"
+                  : "登录 KunCode"}
+              </Button>
+              {selected?.connected && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setDemo(false);
+                    setStage("model");
+                  }}
+                >
+                  使用此连接
+                  <ArrowRight />
+                </Button>
+              )}
+            </div>
             <Button
+              variant="ghost"
+              className="demo-entry"
               onClick={() => {
                 setDemo(true);
-                login("演示用户");
+                setModel(DEMO_MODELS[0].id);
+                setError(null);
                 setStage("model");
               }}
-              className="demo-entry"
             >
-              体验配置流程
+              体验演示流程
               <ArrowRight />
             </Button>
-            {api.isTauri() && (
-              <details
-                className="technical-details connection-details"
-                onToggle={(event) => setDemo(!event.currentTarget.open)}
-              >
-                <summary>使用已有连接信息</summary>
-                <form onSubmit={connect}>
-                  <div className="form-field">
-                    <Label htmlFor="connection-credential">账户连接凭据</Label>
-                    <Input
-                      id="connection-credential"
-                      value={apiKey}
-                      onChange={(e) => setApiKey(e.target.value)}
-                      type="password"
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="粘贴账户提供的连接凭据"
-                      required
-                    />
-                  </div>
-                  <details className="technical-details">
-                    <summary>更改服务地址（可选）</summary>
-                    <div className="form-field">
-                      <Label htmlFor="base-url">服务地址</Label>
-                      <Input
-                        id="base-url"
-                        value={baseUrl}
-                        onChange={(e) => setBaseUrl(e.target.value)}
-                        required
-                      />
-                    </div>
-                  </details>
-                  <Button type="submit">
-                    继续
-                    <ArrowRight />
-                  </Button>
-                </form>
-              </details>
-            )}
             {!api.isTauri() && (
               <p className="page-footnote">
-                当前为浏览器演示，本机配置在 Windows 应用中完成。
+                浏览器演示不会登录账户、创建密钥或写入本机配置。
               </p>
             )}
           </section>
         )}
         {stage === "model" && (
           <form onSubmit={handlePreview}>
+            {modelLoading && (
+              <p role="status">
+                <Loader2 className="animate-spin inline" />
+                正在获取站点模型…
+              </p>
+            )}
             <RadioGroup
               value={model}
               onValueChange={setModel}
               className="setup-models"
               aria-label="选择模型"
-              onFocusCapture={(event) => {
-                if (
-                  event.target instanceof HTMLButtonElement &&
-                  event.target.getAttribute("role") === "radio"
-                )
-                  setModel(event.target.value);
-              }}
             >
-              {DEMO_MODELS.map((item, index) => (
+              {options.map((item, index) => (
                 <label
                   key={item.id}
-                  htmlFor={`model-${item.id}`}
+                  htmlFor={`model-${index}`}
                   className={cn("model-row", model === item.id && "selected")}
                 >
-                  <RadioGroupItem id={`model-${item.id}`} value={item.id} />
+                  <RadioGroupItem id={`model-${index}`} value={item.id} />
                   <span className="model-copy">
-                    <strong>
-                      {item.name}
-                      {index === 0 && <small>推荐</small>}
-                    </strong>
+                    <strong>{item.name}</strong>
                     <span>{item.description}</span>
                   </span>
                 </label>
               ))}
             </RadioGroup>
-            {!demo && (
-              <details className="technical-details">
-                <summary>使用其他模型</summary>
-                <div className="form-field">
-                  <Label htmlFor="setup-model">模型名称</Label>
-                  <Input
-                    id="setup-model"
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
-                    required
-                  />
-                </div>
-              </details>
+            {manualModel && (
+              <div className="form-field">
+                <Label htmlFor="manual-model">模型 ID</Label>
+                <Input
+                  id="manual-model"
+                  value={model}
+                  onChange={(event) => setModel(event.target.value)}
+                  required
+                  maxLength={256}
+                />
+              </div>
+            )}
+            {modelNotice && (
+              <p className="page-footnote" role="status">
+                {modelNotice}
+              </p>
+            )}
+            {demo && (
+              <p className="page-footnote">
+                这里显示演示模型，真实连接将读取服务器模型列表。
+              </p>
+            )}
+            {error && !modelLoading && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setStage("connect")}
+              >
+                重新选择连接
+              </Button>
             )}
             <div className="model-footer">
-              <Button type="submit" disabled={busy}>
+              <Button
+                type="submit"
+                disabled={
+                  busy ||
+                  modelLoading ||
+                  !model.trim() ||
+                  (!demo && !manualModel && !models.includes(model))
+                }
+              >
                 {busy && <Loader2 className="animate-spin" />}下一步
                 <ArrowRight />
               </Button>
             </div>
-            <p className="page-footnote">
-              模型目录为示例，实际支持情况以账户服务为准。
-            </p>
           </form>
         )}
         {stage === "preview" && preview && (
@@ -437,7 +433,7 @@ export default function SetupPage() {
             <ConfigurationPreview preview={preview} demo={demo} />
             {!demo && !agent.installed && (
               <p className="inline-error">
-                尚未检测到 {agent.name}，请先到系统诊断检查安装状态。
+                尚未检测到 {agent.name}，请到系统诊断检查安装状态。
               </p>
             )}
             <div className="setup-form-footer">
@@ -456,29 +452,22 @@ export default function SetupPage() {
           </>
         )}
       </div>
-      <OperationDialog
-        operation={operation}
-        onClose={closeOperation}
-        action={
-          operation?.phase === "success"
-            ? { label: `启动 ${agent.name}`, onClick: launchConfigured }
-            : operation?.phase === "error" &&
-                results.some((step) => step.step === "写入配置" && step.ok)
-              ? { label: "重新测试", onClick: () => void retest() }
-              : undefined
-        }
+      <ConnectionDialog
+        open={connectOpen}
+        onOpenChange={setConnectOpen}
+        onConnected={(connection) => {
+          setConnectionId(connection.id);
+          setDemo(false);
+          setStage("model");
+        }}
       />
       <OperationDialog
-        operation={launcher.operation}
+        operation={operation}
         onClose={() => {
-          launcher.close();
-          if (launcher.operation?.phase === "success") navigate("/");
+          const done = operation?.phase === "success";
+          setOperation(null);
+          if (done) navigate("/");
         }}
-        action={
-          launcher.operation?.phase === "error"
-            ? { label: "修复配置", onClick: () => launcher.close() }
-            : undefined
-        }
       />
     </>
   );

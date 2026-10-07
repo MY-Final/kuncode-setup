@@ -4,6 +4,14 @@ use serde::Serialize;
 /// 注意：绝不能把 API Key / Token / 密码放进错误信息里。
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
+    #[error("{0}")]
+    Auth(String),
+    #[error("{0}")]
+    Permission(String),
+    #[error("{0}")]
+    Unsupported(String),
+    #[error("操作已取消")]
+    Cancelled,
     #[error("未找到 {0}")]
     NotFound(String),
 
@@ -41,6 +49,10 @@ pub struct ErrorPayload {
 impl From<AppError> for ErrorPayload {
     fn from(value: AppError) -> Self {
         let kind = match &value {
+            AppError::Auth(_) => "auth",
+            AppError::Permission(_) => "permission",
+            AppError::Unsupported(_) => "unsupported",
+            AppError::Cancelled => "cancelled",
             AppError::NotFound(_) => "not_found",
             AppError::Io(_) => "io",
             AppError::Parse(_) => "parse",

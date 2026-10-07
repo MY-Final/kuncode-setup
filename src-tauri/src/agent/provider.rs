@@ -1,4 +1,4 @@
-use crate::agent::model::{AgentConfig, ConfigPreview, TestResult};
+use crate::agent::model::{AgentConfig, ConfigPreview};
 use crate::env::ToolStatus;
 use crate::error::AppResult;
 
@@ -33,8 +33,11 @@ pub trait AgentProvider {
     /// 写入配置。
     fn configure(&self, config: &AgentConfig) -> AppResult<()>;
 
-    /// 测试连通性。
-    fn test(&self, config: &AgentConfig) -> TestResult;
+    fn configuration_matches(&self, config: &AgentConfig) -> AppResult<bool>;
+
+    fn configuration_paths(&self) -> Vec<std::path::PathBuf> {
+        self.config_path().into_iter().collect()
+    }
 
     /// 启动 Agent。
     fn launch(&self) -> AppResult<String>;

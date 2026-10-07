@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 /// 统一的 Agent 配置模型。
 /// 前端「不应该」出现大量 if codex / if claude / if opencode，
 /// 所有差异都由各 Provider 在 Rust 层消化。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentConfig {
     pub agent_id: String,
@@ -14,7 +14,7 @@ pub struct AgentConfig {
 }
 
 /// 即将写入的配置预览（API Key 已掩码）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigPreview {
     pub agent_id: String,
@@ -34,17 +34,8 @@ pub struct ConfigPreview {
     pub changes: Vec<String>,
 }
 
-/// 配置执行阶段的结果。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StepResult {
-    pub step: String,
-    pub ok: bool,
-    pub detail: Option<String>,
-}
-
 /// 连通性测试结果。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TestResult {
     pub ok: bool,

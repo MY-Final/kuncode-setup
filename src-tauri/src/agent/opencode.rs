@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use super::model::{mask_api_key, AgentConfig, ConfigPreview, TestResult};
+use super::model::{mask_api_key, AgentConfig, ConfigPreview};
 use super::provider::AgentProvider;
-use crate::config::{backup_file, ensure_parent};
+use crate::config::{atomic_write, backup_file};
 use crate::env::{detect_cli, ToolStatus};
 use crate::error::AppResult;
 
@@ -81,50 +81,74 @@ impl AgentProvider for OpenCodeProvider {
             .config_path()
             .ok_or_else(|| crate::error::AppError::Other("无法定位用户主目录".into()))?;
 
-        let mut value: serde_json::Value = match std::fs::read_to_string(&path) {
-            Ok(text) if !text.trim().is_empty() => {
-                serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({}))
-            }
-            _ => serde_json::json!({}),
-        };
-
-        let obj = value
-            .as_object_mut()
-            .ok_or_else(|| crate::error::AppError::Parse("opencode.json 不是对象".into()))?;
-
-        obj.insert("model".into(), serde_json::json!(config.model));
-
-        let providers = obj
-            .entry("provider")
-            .or_insert_with(|| serde_json::json!({}));
-        if !providers.is_object() {
-            *providers = serde_json::json!({});
-        }
-        providers.as_object_mut().unwrap().insert(
-            "kuncode".into(),
-            serde_json::json!({
-                "npm": "@ai-sdk/openai-compatible",
-                "name": "KunCode",
-                "options": {
-                    "baseURL": config.base_url,
-                    "apiKey": config.api_key,
-                },
-                "models": {
-                    config.model.clone(): { "name": config.model.clone() }
-                }
-            }),
-        );
-
-        ensure_parent(&path)?;
-        std::fs::write(&path, serde_json::to_string_pretty(&value)?)?;
-        Ok(())
+        write_configuration(&path, config)
     }
 
-    fn test(&self, config: &AgentConfig) -> TestResult {
-        crate::agent::http_test::probe(&config.base_url, &config.api_key, &config.model)
+    fn configuration_matches(&self, config: &AgentConfig) -> AppResult<bool> {
+        let Some(path) = self.config_path() else {
+            return Ok(false);
+        };
+        let value: serde_json::Value = match std::fs::read(path) {
+            Ok(body) => match serde_json::from_slice(&body) {
+                Ok(value) => value,
+                Err(_) => return Ok(false),
+            },
+            Err(_) => return Ok(false),
+        };
+        Ok(value.get("model").and_then(serde_json::Value::as_str)
+            == Some(&format!("kuncode/{}", config.model))
+            && value
+                .pointer("/provider/kuncode/options/baseURL")
+                .and_then(serde_json::Value::as_str)
+                == Some(&config.base_url)
+            && value
+                .pointer("/provider/kuncode/options/apiKey")
+                .and_then(serde_json::Value::as_str)
+                == Some(&config.api_key))
     }
 
     fn launch(&self) -> AppResult<String> {
         crate::agent::launch::spawn("opencode", &[])
     }
+}
+
+pub(super) fn write_configuration(path: &std::path::Path, config: &AgentConfig) -> AppResult<()> {
+    let mut value: serde_json::Value = match std::fs::read_to_string(path) {
+        Ok(text) if !text.trim().is_empty() => {
+            serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({}))
+        }
+        _ => serde_json::json!({}),
+    };
+
+    let obj = value
+        .as_object_mut()
+        .ok_or_else(|| crate::error::AppError::Parse("opencode.json 不是对象".into()))?;
+
+    obj.insert(
+        "model".into(),
+        serde_json::json!(format!("kuncode/{}", config.model)),
+    );
+
+    let providers = obj
+        .entry("provider")
+        .or_insert_with(|| serde_json::json!({}));
+    if !providers.is_object() {
+        *providers = serde_json::json!({});
+    }
+    providers.as_object_mut().unwrap().insert(
+        "kuncode".into(),
+        serde_json::json!({
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "KunCode",
+            "options": {
+                "baseURL": config.base_url,
+                "apiKey": config.api_key,
+            },
+            "models": {
+                config.model.clone(): { "name": config.model.clone() }
+            }
+        }),
+    );
+
+    atomic_write(path, &serde_json::to_string_pretty(&value)?)
 }

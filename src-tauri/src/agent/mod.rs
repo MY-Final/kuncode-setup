@@ -1,10 +1,11 @@
 pub mod claude;
 pub mod codex;
-pub mod http_test;
 pub mod launch;
 pub mod model;
 pub mod opencode;
 pub mod provider;
+#[cfg(test)]
+mod tests;
 
 use serde::{Deserialize, Serialize};
 

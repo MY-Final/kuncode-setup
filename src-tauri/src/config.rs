@@ -6,7 +6,18 @@ use crate::error::{AppError, AppResult};
 
 /// 备份时间戳，例如 20261007-153012。
 pub fn timestamp() -> String {
-    Local::now().format("%Y%m%d-%H%M%S").to_string()
+    Local::now().format("%Y%m%d-%H%M%S-%f").to_string()
+}
+
+pub fn atomic_write(path: &Path, body: &str) -> AppResult<()> {
+    ensure_parent(path)?;
+    let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
+    std::fs::write(&temporary, body)?;
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::remove_file(temporary);
+        return Err(error.into());
+    }
+    Ok(())
 }
 
 /// 为某个配置文件生成备份路径：<name>.kuncode.bak
