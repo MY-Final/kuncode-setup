@@ -13,37 +13,62 @@ import {
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { useApp } from "@/lib/store";
-import { isTauri, testConnection } from "@/lib/tauri/api";
+import { isTauri, probeToolConnection, testConnection } from "@/lib/tauri/api";
 import type { TestResult } from "@/lib/types";
 import { cn, errorMessage } from "@/lib/utils";
 export default function DiagnosePage() {
-  const { environment, agents, loading, refresh, error, draft } = useApp();
+  const {
+    environment,
+    agents,
+    loading,
+    refresh,
+    refreshConnections,
+    error,
+    configurations,
+  } = useApp();
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<TestResult | null>(null);
   const tools = [...(environment?.tools ?? []), ...agents];
-  function redact(value: string) {
-    return draft?.apiKey
-      ? value.split(draft.apiKey).join("[凭据已隐藏]")
-      : value;
-  }
+  const configured = Object.keys(configurations).filter(
+    (id) => !configurations[id].demo,
+  );
   async function detect() {
     setResult(null);
     await refresh();
   }
   async function test() {
-    if (testing || (isTauri() && !draft?.apiKey)) return;
+    if (testing || (isTauri() && !configured.length)) return;
     setTesting(true);
     setResult(null);
     try {
-      const value = await testConnection(
-        draft ?? { agentId: "codex", baseUrl: "", model: "", apiKey: "" },
-      );
-      setResult({ ...value, message: redact(value.message) });
+      if (isTauri()) {
+        const checks = await Promise.allSettled(
+          configured.map((id) => probeToolConnection(id)),
+        );
+        const failures = checks.filter((value) => value.status === "rejected");
+        setResult({
+          ok: !failures.length,
+          latencyMs: null,
+          message: checks
+            .map(
+              (value, index) =>
+                `${agents.find((agent) => agent.id === configured[index])?.name ?? configured[index]}：${value.status === "fulfilled" ? value.value.message : errorMessage(value.reason)}`,
+            )
+            .join("；"),
+        });
+        await refreshConnections();
+      } else
+        setResult(
+          await testConnection(
+            { agentId: "codex", baseUrl: "", model: "", apiKey: "" },
+            true,
+          ),
+        );
     } catch (e) {
       setResult({
         ok: false,
         latencyMs: null,
-        message: redact(errorMessage(e)),
+        message: errorMessage(e),
       });
     } finally {
       setTesting(false);
@@ -169,7 +194,7 @@ export default function DiagnosePage() {
             variant="outline"
             size="sm"
             onClick={() => void test()}
-            disabled={testing || (isTauri() && !draft?.apiKey)}
+            disabled={testing || (isTauri() && !configured.length)}
           >
             {testing && <RefreshCw className="animate-spin" />}
             {isTauri() ? "检查连接" : "演示检查"}
@@ -181,7 +206,7 @@ export default function DiagnosePage() {
           {result.message}
         </p>
       )}
-      {isTauri() && !draft?.apiKey && (
+      {isTauri() && !configured.length && (
         <p className="page-footnote">请先完成工具配置，再检查服务连接。</p>
       )}
     </div>

@@ -22,6 +22,7 @@ export interface OperationState {
   steps: OperationStep[];
   progress?: number;
   error?: string;
+  needsRepair?: boolean;
 }
 
 export function OperationDialog({
@@ -91,7 +92,7 @@ export function OperationDialog({
                     : step.status === "error"
                       ? "未完成"
                       : step.status === "warning"
-                        ? "未检测到"
+                        ? "待确认"
                         : "等待中"}
               </small>
             </li>

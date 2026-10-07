@@ -10,16 +10,20 @@ import {
 import * as api from "@/lib/tauri/api";
 import { errorMessage } from "@/lib/utils";
 import type {
-  AgentConfig,
   AgentMeta,
   EnvironmentReport,
   Session,
+  ConnectionDraft,
+  ConnectionSnapshot,
+  ConnectionSummary,
 } from "@/lib/types";
 
 export interface ToolConfiguration {
   model: string;
   demo: boolean;
   status: "ready" | "error";
+  connectionId?: string;
+  verified?: boolean;
 }
 interface AppState {
   configurations: Record<string, ToolConfiguration>;
@@ -29,58 +33,56 @@ interface AppState {
     demo: boolean,
     status?: ToolConfiguration["status"],
   ) => void;
+  connections: ConnectionSummary[];
+  authorizationSite: string;
+  updateAuthorizationSite: (site: string) => Promise<void>;
+  refreshConnections: () => Promise<void>;
   environment: EnvironmentReport | null;
   agents: AgentMeta[];
   session: Session | null;
   loading: boolean;
   error: string | null;
   refresh: () => Promise<boolean>;
-  login: (account: string) => void;
-  logout: () => void;
-  /** 当前正在配置的 Agent（用于跨页面流程） */
-  draft: AgentConfig | null;
-  setDraft: (config: AgentConfig | null) => void;
+  logout: (connectionId?: string) => Promise<string | null>;
+  draft: ConnectionDraft | null;
+  setDraft: (config: ConnectionDraft | null) => void;
 }
-
 const AppContext = createContext<AppState | null>(null);
-
 export function AppProvider({ children }: { children: ReactNode }) {
   const [environment, setEnvironment] = useState<EnvironmentReport | null>(
     null,
   );
   const [agents, setAgents] = useState<AgentMeta[]>([]);
-  const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<AgentConfig | null>(null);
-  const [configurations, setConfigurations] = useState<
+  const [snapshot, setSnapshot] = useState<ConnectionSnapshot>({
+    authorizationSite: api.DEFAULT_AUTHORIZATION_SITE,
+    currentOfficial: null,
+    connections: [],
+    bindings: {},
+  });
+  const [demoConfigurations, setDemoConfigurations] = useState<
     Record<string, ToolConfiguration>
   >({});
-  const recordConfiguration = useCallback(
-    (
-      agentId: string,
-      model: string,
-      demo: boolean,
-      status: ToolConfiguration["status"] = "ready",
-    ) => {
-      setConfigurations((previous) => ({
-        ...previous,
-        [agentId]: { model, demo, status },
-      }));
-    },
-    [],
-  );
-
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState<ConnectionDraft | null>(null);
+  const refreshConnections = useCallback(async () => {
+    setSnapshot(await api.listConnections());
+  }, []);
+  const updateAuthorizationSite = useCallback(async (site: string) => {
+    setSnapshot(await api.setAuthorizationSite(site));
+  }, []);
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [env, list] = await Promise.all([
+      const [env, list, current] = await Promise.all([
         api.detectEnvironment(),
         api.listAgents(),
+        api.listConnections(),
       ]);
       setEnvironment(env);
       setAgents(list);
+      setSnapshot(current);
       return true;
     } catch (e) {
       setError(errorMessage(e));
@@ -89,55 +91,79 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setLoading(false);
     }
   }, []);
-
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  const login = useCallback((account: string) => {
-    setSession({ account, balance: "未接入" });
-  }, []);
-
-  const logout = useCallback(() => {
-    setSession(null);
-    setDraft(null);
-  }, []);
-
-  const value = useMemo<AppState>(
-    () => ({
-      environment,
-      agents,
-      session,
-      loading,
-      error,
-      refresh,
-      login,
-      logout,
-      draft,
-      setDraft,
-      configurations,
-      recordConfiguration,
-    }),
-    [
-      environment,
-      agents,
-      session,
-      loading,
-      error,
-      refresh,
-      login,
-      logout,
-      draft,
-      configurations,
-      recordConfiguration,
-    ],
+  const recordConfiguration = useCallback(
+    (
+      agentId: string,
+      model: string,
+      demo: boolean,
+      status: ToolConfiguration["status"] = "ready",
+    ) => {
+      if (demo)
+        setDemoConfigurations((previous) => ({
+          ...previous,
+          [agentId]: { model, demo, status },
+        }));
+    },
+    [],
   );
-
+  const official = snapshot.connections.find(
+    (connection) =>
+      connection.id === snapshot.currentOfficial &&
+      connection.connected &&
+      connection.kind === "kuncode_authorized",
+  );
+  const session = official
+    ? { account: official.account ?? "KunCode 用户", connectionId: official.id }
+    : null;
+  const logout = useCallback(
+    async (connectionId?: string) => {
+      const id = connectionId ?? snapshot.currentOfficial;
+      if (!id) return null;
+      const warning = await api.logoutConnection(id);
+      await refreshConnections();
+      return warning;
+    },
+    [snapshot.currentOfficial, refreshConnections],
+  );
+  const configurations = useMemo(() => {
+    const current: Record<string, ToolConfiguration> = {
+      ...demoConfigurations,
+    };
+    Object.values(snapshot.bindings).forEach((binding) => {
+      current[binding.agentId] = {
+        model: binding.model,
+        demo: false,
+        status: binding.status,
+        connectionId: binding.connectionId,
+        verified: binding.verified,
+      };
+    });
+    return current;
+  }, [snapshot.bindings, demoConfigurations]);
+  const value: AppState = {
+    environment,
+    agents,
+    session,
+    connections: snapshot.connections,
+    authorizationSite: snapshot.authorizationSite,
+    updateAuthorizationSite,
+    loading,
+    error,
+    refresh,
+    refreshConnections,
+    logout,
+    draft,
+    setDraft,
+    configurations,
+    recordConfiguration,
+  };
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
-
 export function useApp(): AppState {
-  const ctx = useContext(AppContext);
-  if (!ctx) throw new Error("useApp 必须在 AppProvider 内使用");
-  return ctx;
+  const context = useContext(AppContext);
+  if (!context) throw new Error("useApp 必须在 AppProvider 内使用");
+  return context;
 }

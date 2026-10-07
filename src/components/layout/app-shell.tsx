@@ -23,12 +23,16 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useApp } from "@/lib/store";
-import { cn } from "@/lib/utils";
+import { cn, errorMessage } from "@/lib/utils";
+import { ConnectionDialog } from "@/components/connection-dialog";
+import { toast } from "sonner";
 export function AppShell({ children }: { children: ReactNode }) {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const { session, logout } = useApp();
   const [help, setHelp] = useState(false);
+  const [connect, setConnect] = useState(false);
+  const connectRequested = useRef(false);
   const main = useRef<HTMLElement>(null);
   const accountTrigger = useRef<HTMLButtonElement>(null);
   const helpRequested = useRef(false);
@@ -60,7 +64,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               >
                 <UserRound />
                 <span className="account-name">
-                  {session ? `演示 · ${session.account}` : "KunCode · 未登录"}
+                  {session ? session.account : "KunCode · 未登录"}
                 </span>
                 <ChevronDown />
               </Button>
@@ -73,8 +77,23 @@ export function AppShell({ children }: { children: ReactNode }) {
                   helpRequested.current = false;
                   setHelp(true);
                 }
+                if (connectRequested.current) {
+                  event.preventDefault();
+                  connectRequested.current = false;
+                  setConnect(true);
+                }
               }}
             >
+              {!session && (
+                <DropdownMenuItem
+                  onSelect={() => {
+                    connectRequested.current = true;
+                  }}
+                >
+                  <UserRound />
+                  登录 KunCode
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onSelect={() => navigate("/settings")}>
                 <Settings />
                 KunCode 账户
@@ -88,9 +107,19 @@ export function AppShell({ children }: { children: ReactNode }) {
                 使用指南
               </DropdownMenuItem>
               {session && (
-                <DropdownMenuItem onSelect={logout}>
+                <DropdownMenuItem
+                  onSelect={() => {
+                    void logout()
+                      .then((warning) =>
+                        warning
+                          ? toast.warning(warning)
+                          : toast.success("已退出，工具配置已保留"),
+                      )
+                      .catch((value) => toast.error(errorMessage(value)));
+                  }}
+                >
                   <LogOut />
-                  退出演示
+                  退出登录
                 </DropdownMenuItem>
               )}
             </DropdownMenuContent>
@@ -105,6 +134,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </main>
       </div>
+      <ConnectionDialog open={connect} onOpenChange={setConnect} />
       <Dialog open={help} onOpenChange={setHelp}>
         <DialogContent
           onCloseAutoFocus={(event) => {

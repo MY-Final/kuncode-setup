@@ -9,16 +9,13 @@ import type {
 } from "@/components/operation-dialog";
 
 export function useAgentLaunch() {
-  const { configurations, environment, draft, recordConfiguration } = useApp();
+  const { configurations, environment, refreshConnections } = useApp();
   const [operation, setOperation] = useState<OperationState | null>(null);
   const locked = useRef(false);
   async function launch(agent: AgentMeta) {
-    if (locked.current) return;
     const configured = configurations[agent.id];
-    if (!configured || configured.status !== "ready") return;
+    if (locked.current || configured?.status !== "ready") return;
     locked.current = true;
-    const connection = draft?.agentId === agent.id ? draft : null;
-    const test = configured.demo || !!connection?.apiKey;
     const steps: OperationStep[] = [
       ...["node", "git"].map((id): OperationStep => ({
         label: id === "node" ? "Node.js" : "Git",
@@ -30,77 +27,89 @@ export function useAgentLaunch() {
         label: agent.name,
         status: agent.installed || configured.demo ? "complete" : "error",
       },
-      ...(test
-        ? [{ label: "测试 KunCode 连接", status: "running" as const }]
-        : []),
-      { label: `启动 ${agent.name}`, status: test ? "waiting" : "running" },
+      { label: "检查服务连接", status: "running" },
+      { label: `启动 ${agent.name}`, status: "waiting" },
     ];
     const state: OperationState = {
       agentId: agent.id,
       title: `正在启动 ${agent.name}`,
       description: configured.demo
         ? "演示启动，不会打开本机工具。"
-        : "检查连接后打开工具。",
+        : "检查已配置的工具连接，然后打开工具。",
       phase: "running",
       steps,
-      progress: test ? 50 : 75,
+      progress: 50,
     };
-    setOperation({ ...state, steps: steps.map((step) => ({ ...step })) });
+    const show = (changes: Partial<OperationState>) =>
+      setOperation({
+        ...state,
+        steps: steps.map((step) => ({ ...step })),
+        ...changes,
+      });
+    show({});
+    let warning: string | undefined;
     try {
       if (!agent.installed && !configured.demo)
         throw new Error(`未检测到 ${agent.name}，请到系统诊断检查安装状态。`);
-      if (test) {
-        const result = await api.testConnection(
-          connection ?? {
+      if (configured.demo)
+        await api.testConnection(
+          {
             agentId: agent.id,
             model: configured.model,
             baseUrl: "",
             apiKey: "",
           },
-          configured.demo,
+          true,
         );
-        steps[3].status = result.ok ? "complete" : "error";
-        if (!result.ok)
-          throw new Error("KunCode 连接未通过，请重新配置或前往系统诊断。");
-        steps[4].status = "running";
-        setOperation({
-          ...state,
-          steps: steps.map((step) => ({ ...step })),
-          progress: 80,
-        });
+      else {
+        try {
+          const result = await api.probeToolConnection(agent.id);
+          if (!result.ok) throw new Error(result.message);
+        } catch (value) {
+          const kind =
+            typeof value === "object" && value !== null && "kind" in value
+              ? value.kind
+              : "error";
+          if (kind === "auth" || kind === "parse") {
+            await refreshConnections();
+            throw value;
+          }
+          warning = `${errorMessage(value)}。继续打开已配置的工具。`;
+        }
       }
+      steps[3].status = warning ? "warning" : "complete";
+      steps[4].status = "running";
+      show({ progress: 80 });
       await api.launchAgent(agent.id, configured.demo);
-      steps[steps.length - 1].status = "complete";
-      setOperation({
-        ...state,
+      steps[4].status = "complete";
+      show({
         title: configured.demo
           ? `${agent.name} 演示启动完成`
           : `${agent.name} 已启动`,
-        description: configured.demo
-          ? "演示流程已完成，本机工具未被打开。"
-          : "工具已打开，可以开始使用。",
-        steps: steps.map((step) => ({ ...step })),
+        description:
+          warning ??
+          (configured.demo
+            ? "未启动本机工具，也未连接真实站点。"
+            : "工具已打开，可以开始使用。"),
         phase: "success",
         progress: 100,
       });
-    } catch (error) {
+    } catch (value) {
+      const kind =
+        typeof value === "object" && value !== null && "kind" in value
+          ? value.kind
+          : "error";
       steps
         .filter((step) => step.status === "running")
         .forEach((step) => {
           step.status = "error";
         });
-      const message = errorMessage(error);
-      recordConfiguration(agent.id, configured.model, configured.demo, "error");
-      setOperation({
-        ...state,
+      show({
         title: `${agent.name} 启动未完成`,
+        description: "请根据提示检查工具或连接。",
         phase: "error",
-        description: "请检查连接或修复配置后重试。",
-        steps: steps.map((step) => ({ ...step })),
-        progress: 100,
-        error: connection?.apiKey
-          ? message.split(connection.apiKey).join("[凭据已隐藏]")
-          : message,
+        error: errorMessage(value),
+        needsRepair: kind === "auth" || kind === "parse",
       });
     } finally {
       locked.current = false;

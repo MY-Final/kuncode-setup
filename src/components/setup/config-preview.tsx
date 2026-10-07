@@ -9,8 +9,9 @@ export function ConfigurationPreview({
   demo: boolean;
 }) {
   const model =
-    DEMO_MODELS.find((item) => item.id === preview.model)?.name ??
-    preview.model;
+    (demo
+      ? DEMO_MODELS.find((item) => item.id === preview.model)?.name
+      : undefined) ?? preview.model;
   return (
     <div className="config-summary">
       <div className="preview-agent">

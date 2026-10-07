@@ -63,5 +63,55 @@ export interface TestResult {
 /** 本地登录会话（仅在内存中，MVP 不落盘明文） */
 export interface Session {
   account: string;
-  balance: string;
+  connectionId: string;
+}
+
+export type ConnectionKind = "kuncode_authorized" | "newapi_pat" | "api_key";
+export interface ConnectionSummary {
+  id: string;
+  kind: ConnectionKind;
+  siteUrl: string;
+  apiBaseUrl: string;
+  account: string | null;
+  userId: number | null;
+  legacyUserId: number | null;
+  expiresAt: number | null;
+  connected: boolean;
+  verified: boolean;
+}
+export interface ToolBinding {
+  agentId: string;
+  connectionId: string;
+  model: string;
+  tokenId: number | null;
+  status: "ready" | "error";
+  verified: boolean;
+}
+export interface ConnectionSnapshot {
+  authorizationSite: string;
+  currentOfficial: string | null;
+  connections: ConnectionSummary[];
+  bindings: Record<string, ToolBinding>;
+}
+export interface ImportConnection {
+  kind: "newapi_pat" | "api_key";
+  siteUrl: string;
+  apiBaseUrl?: string;
+  credential: string;
+  userId?: number;
+}
+export interface ConnectionDraft {
+  agentId: string;
+  connectionId: string;
+  model: string;
+  demo: boolean;
+}
+export interface ConnectionStep {
+  step: string;
+  status: "waiting" | "running" | "complete" | "warning" | "error";
+  detail: string | null;
+}
+export interface ConfigurationOutcome {
+  binding: ToolBinding;
+  steps: ConnectionStep[];
 }

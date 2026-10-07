@@ -583,6 +583,41 @@
   font-size: 15px;
   font-weight: 600;
 }
+.connection-entry {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 20px;
+}
+.connection-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.connection-modes {
+  display: flex;
+  gap: 24px;
+  font-size: 13px;
+}
+.connection-modes label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.connection-modes input {
+  accent-color: var(--blue);
+}
+.connection-wait {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.connection-list {
+  margin-bottom: 20px;
+}
+.connection-list .model-copy > span {
+  overflow-wrap: anywhere;
+}
 .connection-section > p {
   font-size: 12px;
   color: var(--muted-foreground);
@@ -916,6 +951,9 @@
   color: var(--muted-foreground);
   margin-top: 5px;
   line-height: 1.7;
+}
+.authorization-settings {
+  margin-top: 18px;
 }
 .version-text,
 .count-label {

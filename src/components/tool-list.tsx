@@ -32,8 +32,9 @@ export function ToolList({ management = false }: { management?: boolean }) {
           const ready = config?.status === "ready";
           const failed = config?.status === "error";
           const model =
-            DEMO_MODELS.find((item) => item.id === config?.model)?.name ??
-            config?.model;
+            (config?.demo
+              ? DEMO_MODELS.find((item) => item.id === config?.model)?.name
+              : undefined) ?? config?.model;
           return (
             <article className="coding-tool" key={agent.id}>
               <AgentIcon id={agent.id} />
@@ -101,11 +102,14 @@ export function ToolList({ management = false }: { management?: boolean }) {
         action={
           operation?.phase === "error"
             ? {
-                label: "修复配置",
+                label: operation.needsRepair ? "修复配置" : "系统诊断",
                 onClick: () => {
                   const id = operation.agentId;
                   close();
-                  if (id) navigate(`/setup/${id}`);
+                  if (id)
+                    navigate(
+                      operation.needsRepair ? `/setup/${id}` : "/diagnose",
+                    );
                 },
               }
             : undefined
