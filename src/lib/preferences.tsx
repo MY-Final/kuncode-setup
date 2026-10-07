@@ -12,11 +12,13 @@ interface Preferences {
   theme: Theme;
   compact: boolean;
   reduceMotion: boolean;
+  sidebarCollapsed: boolean;
 }
 const defaults: Preferences = {
   theme: "light",
   compact: false,
   reduceMotion: false,
+  sidebarCollapsed: false,
 };
 const STORAGE_KEY = "kuncode:preferences:v1";
 function readPreferences(): Preferences {
@@ -30,6 +32,7 @@ function readPreferences(): Preferences {
       theme: p.theme === "dark" || p.theme === "system" ? p.theme : "light",
       compact: p.compact === true,
       reduceMotion: p.reduceMotion === true,
+      sidebarCollapsed: p.sidebarCollapsed === true,
     };
   } catch {
     return defaults;

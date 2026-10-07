@@ -1,36 +1,36 @@
 import { NavLink, useLocation } from "react-router-dom";
 import {
-  LayoutGrid,
-  SlidersHorizontal,
+  House,
+  Wrench,
   Activity,
-  Settings2,
-  CodeXml,
-  ShieldCheck,
-  ArrowUpRight,
+  Settings,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { usePreferences } from "@/lib/preferences";
 const nav = [
-  { to: "/", label: "工作台", icon: LayoutGrid },
-  { to: "/models", label: "工具配置", icon: SlidersHorizontal },
+  { to: "/", label: "首页", icon: House },
+  { to: "/models", label: "工具配置", icon: Wrench },
   { to: "/diagnose", label: "系统诊断", icon: Activity },
+  { to: "/settings", label: "设置", icon: Settings },
 ];
+export function Brand() {
+  return (
+    <NavLink to="/" className="brand" aria-label="KunCode Setup 首页">
+      <img src="/icon.svg" alt="" className="brand-mark" />
+      <span className="brand-label">KunCode Setup</span>
+    </NavLink>
+  );
+}
 export function Sidebar() {
   const { pathname } = useLocation();
+  const { preferences, updatePreferences } = usePreferences();
+  const collapsed = preferences.sidebarCollapsed;
   return (
-    <aside className="app-sidebar">
-      <NavLink to="/" className="brand" aria-label="KunCode Setup 工作台">
-        <span className="brand-mark">
-          <CodeXml aria-hidden="true" />
-        </span>
-        <span className="sidebar-label">
-          <strong>
-            KunCode<span className="brand-dot">.</span>
-          </strong>
-          <small>SETUP</small>
-        </span>
-      </NavLink>
-      <div className="sidebar-section-label sidebar-label">工作空间</div>
-      <nav className="sidebar-nav" aria-label="主导航">
+    <aside className={cn("app-sidebar", collapsed && "collapsed")}>
+      <Brand />
+      <nav className="sidebar-nav" aria-label="主导航" id="primary-navigation">
         {nav.map(({ icon: Icon, ...item }) => (
           <NavLink
             key={item.to}
@@ -57,31 +57,19 @@ export function Sidebar() {
           </NavLink>
         ))}
       </nav>
-      <div className="sidebar-bottom">
-        <div className="sidebar-note sidebar-label">
-          <ShieldCheck />
-          <strong>安心配置，专注创作</strong>
-          <p>
-            先预览，再写入。
-            <br />
-            已有配置会自动备份。
-          </p>
-          <NavLink to="/diagnose">
-            检查本机环境 <ArrowUpRight />
-          </NavLink>
-        </div>
-        <NavLink
-          to="/settings"
-          title="设置"
-          className={({ isActive }) => cn("nav-item", isActive && "active")}
+      <div className="sidebar-footer">
+        <button
+          className="sidebar-toggle"
+          onClick={() => updatePreferences({ sidebarCollapsed: !collapsed })}
+          aria-label={collapsed ? "展开侧栏" : "折叠侧栏"}
+          title={collapsed ? "展开侧栏" : "折叠侧栏"}
+          aria-expanded={!collapsed}
+          aria-controls="primary-navigation"
         >
-          <Settings2 aria-hidden="true" />
-          <span className="sidebar-label">设置</span>
-        </NavLink>
-        <div className="sidebar-version sidebar-label">
-          <span>KunCode Setup</span>
-          <span>v0.1.0</span>
-        </div>
+          {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+          <span className="sidebar-label">折叠侧栏</span>
+        </button>
+        <span className="sidebar-version">v0.1.0</span>
       </div>
     </aside>
   );

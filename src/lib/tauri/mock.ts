@@ -109,9 +109,9 @@ export async function mockPreviewConfig(
 
 export async function mockApplyConfig(
   config: AgentConfig,
+  onStep?: (step: StepResult) => void,
 ): Promise<StepResult[]> {
-  await delay(1200);
-  return [
+  const results: StepResult[] = [
     {
       step: `检查 ${agentNames[config.agentId] ?? config.agentId}`,
       ok: true,
@@ -121,6 +121,11 @@ export async function mockApplyConfig(
     { step: "写入配置", ok: true, detail: `模拟设置模型 ${config.model}` },
     { step: "测试连接", ok: true, detail: "演示成功 · 未发送网络请求" },
   ];
+  for (const result of results) {
+    await delay(500);
+    onStep?.(result);
+  }
+  return results;
 }
 
 export async function mockTestConnection(): Promise<TestResult> {

@@ -16,9 +16,19 @@ import type {
   Session,
 } from "@/lib/types";
 
+export interface ToolConfiguration {
+  model: string;
+  demo: boolean;
+  status: "ready" | "error";
+}
 interface AppState {
-  configurations: Record<string, { model: string; demo: boolean }>;
-  recordConfiguration: (agentId: string, model: string, demo: boolean) => void;
+  configurations: Record<string, ToolConfiguration>;
+  recordConfiguration: (
+    agentId: string,
+    model: string,
+    demo: boolean,
+    status?: ToolConfiguration["status"],
+  ) => void;
   environment: EnvironmentReport | null;
   agents: AgentMeta[];
   session: Session | null;
@@ -44,13 +54,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<AgentConfig | null>(null);
   const [configurations, setConfigurations] = useState<
-    Record<string, { model: string; demo: boolean }>
+    Record<string, ToolConfiguration>
   >({});
   const recordConfiguration = useCallback(
-    (agentId: string, model: string, demo: boolean) => {
+    (
+      agentId: string,
+      model: string,
+      demo: boolean,
+      status: ToolConfiguration["status"] = "ready",
+    ) => {
       setConfigurations((previous) => ({
         ...previous,
-        [agentId]: { model, demo },
+        [agentId]: { model, demo, status },
       }));
     },
     [],

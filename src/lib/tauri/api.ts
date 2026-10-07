@@ -44,8 +44,9 @@ export async function previewConfig(
 export async function applyConfig(
   config: AgentConfig,
   demo = false,
+  onStep?: (step: StepResult) => void,
 ): Promise<StepResult[]> {
-  if (demo || !isTauri()) return mock.mockApplyConfig(config);
+  if (demo || !isTauri()) return mock.mockApplyConfig(config, onStep);
   return invoke<StepResult[]>("apply_config", {
     agentId: config.agentId,
     config,
