@@ -1,4 +1,15 @@
 use super::*;
+use std::sync::{Mutex, MutexGuard};
+
+// The Windows credential manager serializes poorly under parallel test
+// threads; tests that touch keyring entries take this shared lock.
+static KEYRING_LOCK: Mutex<()> = Mutex::new(());
+
+fn keyring_lock() -> MutexGuard<'static, ()> {
+    KEYRING_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[test]
 fn rejects_remote_http_and_credentials_in_urls() {
@@ -262,6 +273,7 @@ fn unavailable_models_are_distinct_from_an_invalid_key() {
 
 #[test]
 fn persisted_connections_restore_bindings_and_expiry_does_not_damage_tools() {
+    let _keyring = keyring_lock();
     let directory = std::env::temp_dir().join(format!("kuncode-state-test-{}", Uuid::new_v4()));
     let service = ConnectionService::new(directory.clone()).unwrap();
     let installation_id = service.installation_id().unwrap();
@@ -308,6 +320,7 @@ fn persisted_connections_restore_bindings_and_expiry_does_not_damage_tools() {
 
 #[test]
 fn authorization_destination_survives_restart_without_rebinding_tools() {
+    let _keyring = keyring_lock();
     let directory = std::env::temp_dir().join(format!("kuncode-address-test-{}", Uuid::new_v4()));
     let service = ConnectionService::new(directory.clone()).unwrap();
     assert_eq!(service.authorization_site().unwrap(), KUNCODE_SITE);
@@ -406,6 +419,7 @@ fn cancellation_before_native_worker_starts_prevents_login() {
 #[cfg(windows)]
 #[test]
 fn authorized_logout_targets_original_site_after_setting_changes() {
+    let _keyring = keyring_lock();
     let (site, server) = serve(vec![(200, json!({"success":true}))]);
     let directory = std::env::temp_dir().join(format!("kuncode-origin-test-{}", Uuid::new_v4()));
     let service = ConnectionService::new(directory.clone()).unwrap();
@@ -444,6 +458,7 @@ fn authorized_logout_targets_original_site_after_setting_changes() {
 #[cfg(windows)]
 #[test]
 fn manual_logout_removes_only_local_login_and_preserves_tool_credentials() {
+    let _keyring = keyring_lock();
     let directory = std::env::temp_dir().join(format!("kuncode-vault-test-{}", Uuid::new_v4()));
     let service = ConnectionService::new(directory.clone()).unwrap();
     let connection = ConnectionSummary {
@@ -508,6 +523,7 @@ fn quota_conversion_matches_site_display_settings() {
 #[cfg(windows)]
 #[test]
 fn desktop_profile_parses_stable_account_contract() {
+    let _keyring = keyring_lock();
     let (site, server) = serve(vec![(
         200,
         json!({
