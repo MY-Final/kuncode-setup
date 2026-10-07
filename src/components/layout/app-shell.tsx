@@ -1,12 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import {
-  ChevronDown,
-  BookOpen,
-  Settings,
-  LogOut,
-  UserRound,
-} from "lucide-react";
+import { ChevronDown, BookOpen, IdCard, LogOut, UserRound } from "lucide-react";
 import { Sidebar, Brand } from "@/components/layout/sidebar";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,6 +19,7 @@ import {
 import { useApp } from "@/lib/store";
 import { cn, errorMessage } from "@/lib/utils";
 import { ConnectionDialog } from "@/components/connection-dialog";
+import { AccountPanel } from "@/components/account-panel";
 import { toast } from "sonner";
 export function AppShell({ children }: { children: ReactNode }) {
   const { pathname } = useLocation();
@@ -32,7 +27,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { session, logout } = useApp();
   const [help, setHelp] = useState(false);
   const [connect, setConnect] = useState(false);
+  const [account, setAccount] = useState(false);
   const connectRequested = useRef(false);
+  const accountRequested = useRef(false);
   const main = useRef<HTMLElement>(null);
   const accountTrigger = useRef<HTMLButtonElement>(null);
   const helpRequested = useRef(false);
@@ -82,6 +79,11 @@ export function AppShell({ children }: { children: ReactNode }) {
                   connectRequested.current = false;
                   setConnect(true);
                 }
+                if (accountRequested.current) {
+                  event.preventDefault();
+                  accountRequested.current = false;
+                  setAccount(true);
+                }
               }}
             >
               {!session && (
@@ -94,8 +96,12 @@ export function AppShell({ children }: { children: ReactNode }) {
                   登录 KunCode
                 </DropdownMenuItem>
               )}
-              <DropdownMenuItem onSelect={() => navigate("/settings")}>
-                <Settings />
+              <DropdownMenuItem
+                onSelect={() => {
+                  accountRequested.current = true;
+                }}
+              >
+                <IdCard />
                 KunCode 账户
               </DropdownMenuItem>
               <DropdownMenuItem
@@ -135,6 +141,11 @@ export function AppShell({ children }: { children: ReactNode }) {
         </main>
       </div>
       <ConnectionDialog open={connect} onOpenChange={setConnect} />
+      <AccountPanel
+        open={account}
+        onOpenChange={setAccount}
+        onLogin={() => setConnect(true)}
+      />
       <Dialog open={help} onOpenChange={setHelp}>
         <DialogContent
           onCloseAutoFocus={(event) => {

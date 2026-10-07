@@ -373,6 +373,159 @@
   text-overflow: ellipsis;
   max-width: 160px;
 }
+.account-panel {
+  max-width: 440px;
+}
+.account-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.account-avatar {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--primary) 12%, transparent);
+  color: var(--primary);
+  font-size: 15px;
+  font-weight: 600;
+}
+.account-identity > div {
+  min-width: 0;
+  flex: 1;
+}
+.account-identity strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-identity p {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  margin-top: 3px;
+}
+.account-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  font-size: 10px;
+  color: var(--success, #16a34a);
+}
+.account-badge.warning {
+  color: var(--warning, #d97706);
+}
+.account-badge svg {
+  width: 13px;
+  height: 13px;
+}
+.account-facts {
+  display: grid;
+  gap: 0;
+}
+.account-facts > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border);
+}
+.account-facts dt {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  flex: none;
+}
+.account-facts dd {
+  font-size: 12px;
+  text-align: right;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-facts .account-site {
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.account-loading,
+.account-error {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  padding: 16px 0;
+}
+.account-error {
+  color: var(--destructive, #dc2626);
+}
+.account-empty {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 20px 0 8px;
+  text-align: center;
+}
+.account-empty svg {
+  width: 28px;
+  height: 28px;
+  color: var(--muted-foreground);
+  stroke-width: 1.4;
+}
+.account-empty strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.account-empty p {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  max-width: 260px;
+  line-height: 1.7;
+}
+.account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 4px;
+}
+.account-actions > :last-child {
+  margin-left: auto;
+}
+.account-other {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+.account-other > span {
+  font-size: 10px;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.account-other > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.account-other strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.account-other p {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .page-header {
   display: flex;
   align-items: flex-start;
