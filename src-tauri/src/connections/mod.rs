@@ -927,16 +927,31 @@ fn quota_from_status(status: &Value, profile: &Value) -> Value {
             "quota_per_unit": per_unit,
         });
     }
-    let rate = status
-        .get("usd_exchange_rate")
-        .and_then(Value::as_f64)
-        .filter(|value| *value > 0.0)
-        .unwrap_or(1.0);
-    let symbol = status
+    // Mirror the site's own display rules: only CNY uses the USD exchange rate,
+    // and CUSTOM uses its own rate and symbol.
+    let rate = match display_type.as_str() {
+        "CNY" => status
+            .get("usd_exchange_rate")
+            .and_then(Value::as_f64)
+            .filter(|value| *value > 0.0)
+            .unwrap_or(1.0),
+        "CUSTOM" => status
+            .get("custom_currency_exchange_rate")
+            .and_then(Value::as_f64)
+            .filter(|value| *value > 0.0)
+            .unwrap_or(1.0),
+        _ => 1.0,
+    };
+    let custom_symbol = status
         .get("custom_currency_symbol")
         .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(if display_type == "CNY" { "¥" } else { "$" });
+        .filter(|value| !value.is_empty());
+    let symbol = match display_type.as_str() {
+        "CNY" => "¥".to_owned(),
+        "CUSTOM" => custom_symbol.unwrap_or("¤").to_owned(),
+        "USD" => "$".to_owned(),
+        _ => String::new(),
+    };
     let convert = |value: i64| value as f64 / per_unit * rate;
     json!({
         "display_type": display_type,

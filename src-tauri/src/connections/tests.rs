@@ -518,6 +518,31 @@ fn quota_conversion_matches_site_display_settings() {
     );
     assert_eq!(tokens["display_type"], "TOKENS");
     assert_eq!(tokens["balance"], 1000000.0);
+    // CUSTOM must use its own rate and symbol, not the CNY exchange rate.
+    let custom = quota_from_status(
+        &json!({
+            "quota_per_unit": 500000,
+            "quota_display_type": "CUSTOM",
+            "custom_currency_exchange_rate": 3.0,
+            "custom_currency_symbol": "K",
+            "usd_exchange_rate": 7.0
+        }),
+        &profile,
+    );
+    assert_eq!(custom["display_type"], "CUSTOM");
+    assert_eq!(custom["symbol"], "K");
+    assert_eq!(custom["balance"], 6.0);
+    // USD ignores exchange rates entirely.
+    let usd_with_rate = quota_from_status(
+        &json!({
+            "quota_per_unit": 500000,
+            "quota_display_type": "USD",
+            "usd_exchange_rate": 7.0
+        }),
+        &profile,
+    );
+    assert_eq!(usd_with_rate["symbol"], "$");
+    assert_eq!(usd_with_rate["balance"], 2.0);
 }
 
 #[cfg(windows)]

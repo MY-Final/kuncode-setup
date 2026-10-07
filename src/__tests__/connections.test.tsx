@@ -9,6 +9,8 @@ import { ToolList } from "@/components/tool-list";
 import SetupPage from "@/pages/setup";
 import SettingsPage from "@/pages/settings";
 import { AccountPanel } from "@/components/account-panel";
+import { AppShell } from "@/components/layout/app-shell";
+import HomePage from "@/pages/home";
 import { PreferencesProvider } from "@/lib/preferences";
 import type {
   ConnectionSnapshot,
@@ -364,6 +366,39 @@ it("账户菜单展示站点真实用户信息而不是跳转设置", async () =
   expect(native.invoke).toHaveBeenCalledWith("connection_profile", {
     connectionId: official.id,
   });
+});
+
+it("账户菜单点击后打开账户面板且不跳转设置", async () => {
+  snapshot.connections.push(official);
+  snapshot.currentOfficial = official.id;
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  render(
+    <PreferencesProvider>
+      <AppProvider>
+        <MemoryRouter initialEntries={["/"]}>
+          <Routes>
+            <Route
+              path="/"
+              element={
+                <AppShell>
+                  <HomePage />
+                </AppShell>
+              }
+            />
+            <Route path="/settings" element={<SettingsPage />} />
+          </Routes>
+        </MemoryRouter>
+      </AppProvider>
+    </PreferencesProvider>,
+  );
+  await user.click(
+    await screen.findByRole("button", { name: "KunCode 用户菜单" }),
+  );
+  await user.click(await screen.findByText("KunCode 账户"));
+  expect(await screen.findByText("Owner")).toBeInTheDocument();
+  expect(
+    screen.queryByRole("heading", { name: "设置" }),
+  ).not.toBeInTheDocument();
 });
 
 it("未登录时账户面板提供登录入口", async () => {
