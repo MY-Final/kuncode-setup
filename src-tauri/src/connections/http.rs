@@ -142,6 +142,34 @@ impl SiteClient {
         Ok(profile.clone())
     }
 
+    /// Stable desktop account contract. KunCode (new-api) serves this from
+    /// `/api/desktop/profile`; other compatible providers may implement the
+    /// same shape. Returns the raw object envelope from the site.
+    pub fn desktop_profile(&self, site: &str, token: &str) -> AppResult<Value> {
+        self.request(
+            reqwest::Method::GET,
+            &format!("{site}/api/desktop/profile"),
+            Some(token),
+            None,
+            None,
+        )
+    }
+    /// Public site metadata. Used only for display preferences such as the
+    /// quota unit; a failure must never block the account profile itself.
+    pub fn status(&self, site: &str) -> AppResult<Value> {
+        let response = self.request(
+            reqwest::Method::GET,
+            &format!("{site}/api/status"),
+            None,
+            None,
+            None,
+        )?;
+        response
+            .get("data")
+            .filter(|value| value.is_object())
+            .cloned()
+            .ok_or_else(|| AppError::Unsupported("该站点不提供站点信息".into()))
+    }
     pub fn models(
         &self,
         base: &str,

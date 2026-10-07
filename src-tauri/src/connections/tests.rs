@@ -483,3 +483,88 @@ fn manual_logout_removes_only_local_login_and_preserves_tool_credentials() {
     vault::delete(&tool_reference).unwrap();
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn quota_conversion_matches_site_display_settings() {
+    let profile = json!({"quota": 1000000, "used_quota": 250000});
+    let usd = quota_from_status(&json!({"quota_per_unit": 500000}), &profile);
+    assert_eq!(usd["display_type"], "USD");
+    assert_eq!(usd["balance"], 2.0);
+    assert_eq!(usd["used"], 0.5);
+    let cny = quota_from_status(
+        &json!({"quota_per_unit": 500000, "quota_display_type": "CNY", "usd_exchange_rate": 7.0}),
+        &profile,
+    );
+    assert_eq!(cny["symbol"], "¥");
+    assert_eq!(cny["balance"], 14.0);
+    let tokens = quota_from_status(
+        &json!({"quota_per_unit": 500000, "quota_display_type": "TOKENS"}),
+        &profile,
+    );
+    assert_eq!(tokens["display_type"], "TOKENS");
+    assert_eq!(tokens["balance"], 1000000.0);
+}
+
+#[cfg(windows)]
+#[test]
+fn desktop_profile_parses_stable_account_contract() {
+    let (site, server) = serve(vec![(
+        200,
+        json!({
+            "success": true,
+            "data": {
+                "provider": "newapi",
+                "user": {
+                    "id": 42,
+                    "username": "owner",
+                    "display_name": "Owner Name",
+                    "email": "owner@example.com",
+                    "group": "default",
+                    "role": 1,
+                    "status": 1,
+                    "request_count": 12,
+                    "created_at": 1700000000
+                },
+                "quota": {
+                    "display_type": "USD",
+                    "symbol": "$",
+                    "balance": 3.5,
+                    "used": 1.25
+                },
+                "quota_per_unit": 500000
+            }
+        }),
+    )]);
+    let directory = std::env::temp_dir().join(format!("kuncode-profile-test-{}", Uuid::new_v4()));
+    let service = ConnectionService::new(directory.clone()).unwrap();
+    let connection = ConnectionSummary {
+        id: Uuid::new_v4().to_string(),
+        kind: ConnectionKind::KuncodeAuthorized,
+        site_url: site.clone(),
+        api_base_url: format!("{site}/v1"),
+        account: Some("Owner Name".into()),
+        user_id: Some(42),
+        legacy_user_id: None,
+        expires_at: Some(2000000000),
+        connected: true,
+        verified: true,
+    };
+    let connection = service
+        .store_connection(connection, "test-desktop-token")
+        .unwrap();
+    let profile = service.profile(&connection.id).unwrap();
+    assert_eq!(profile.provider, "newapi");
+    assert!(profile.authenticated);
+    assert_eq!(profile.username.as_deref(), Some("owner"));
+    assert_eq!(profile.display_name.as_deref(), Some("Owner Name"));
+    assert_eq!(profile.email.as_deref(), Some("owner@example.com"));
+    assert_eq!(profile.balance, Some(3.5));
+    assert_eq!(profile.used_quota, Some(1.25));
+    assert_eq!(profile.request_count, Some(12));
+    assert_eq!(profile.member_since, Some(1700000000));
+    assert_eq!(
+        server.join().unwrap(),
+        ["GET /api/desktop/profile HTTP/1.1"]
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}

@@ -131,6 +131,37 @@ pub struct ConnectionSnapshot {
     pub bindings: HashMap<String, ToolBinding>,
 }
 
+/// Account/service profile shown in the user menu. `provider` is the stable
+/// extension point: KunCode currently reports `newapi`, and a future sub2api
+/// backend can return the same shape without changing the desktop UI.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountProfile {
+    pub connection_id: String,
+    pub provider: String,
+    pub kind: ConnectionKind,
+    pub site_url: String,
+    /// Whether the site reported an authenticated account (false for API Key).
+    pub authenticated: bool,
+    pub account: Option<String>,
+    pub username: Option<String>,
+    pub display_name: Option<String>,
+    pub user_id: Option<i64>,
+    pub email: Option<String>,
+    pub role: Option<String>,
+    pub group: Option<String>,
+    pub status: Option<String>,
+    /// Balance in the site's display unit (currency amount, or token count).
+    pub balance: Option<f64>,
+    pub used_quota: Option<f64>,
+    pub request_count: Option<i64>,
+    pub quota_display_type: Option<String>,
+    pub currency_symbol: Option<String>,
+    pub quota_per_unit: Option<f64>,
+    pub member_since: Option<i64>,
+    pub expires_at: Option<i64>,
+    pub connected: bool,
+}
 pub struct ConnectionService {
     state: Mutex<LocalState>,
     directory: PathBuf,
@@ -367,6 +398,139 @@ impl ConnectionService {
         self.store_connection(connection, secret)
     }
 
+    /// Reads the account/service profile for the user menu. KunCode returns the
+    /// stable `/api/desktop/profile` contract; API Key connections have no
+    /// account, so only the service summary is returned.
+    pub fn profile(&self, id: &str) -> AppResult<AccountProfile> {
+        let connection = self.connection(id)?;
+        let secret = vault::get(&connection.credential_reference())?;
+        let client = SiteClient::new()?;
+        if connection.kind == ConnectionKind::ApiKey {
+            return Ok(AccountProfile {
+                connection_id: connection.id,
+                provider: "openai_compatible".into(),
+                kind: connection.kind,
+                site_url: connection.site_url,
+                authenticated: false,
+                account: connection.account,
+                username: None,
+                display_name: None,
+                user_id: None,
+                email: None,
+                role: None,
+                group: None,
+                status: None,
+                balance: None,
+                used_quota: None,
+                request_count: None,
+                quota_display_type: None,
+                currency_symbol: None,
+                quota_per_unit: None,
+                member_since: None,
+                expires_at: connection.expires_at,
+                connected: connection.connected,
+            });
+        }
+        // The stable desktop contract is preferred. Sites that only expose the
+        // generic New API management API fall back to `/api/user/self` plus the
+        // public `/api/status` display preferences, so a future sub2api build
+        // can adopt either shape without a desktop change.
+        let desktop = if connection.kind == ConnectionKind::KuncodeAuthorized {
+            client.desktop_profile(&connection.site_url, &secret).ok()
+        } else {
+            None
+        };
+        let (provider, user, quota) = match desktop.and_then(|response| {
+            response
+                .get("data")
+                .filter(|value| value.is_object())
+                .cloned()
+        }) {
+            Some(data) => (
+                data.get("provider")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("newapi")
+                    .to_owned(),
+                data.get("user").filter(|value| value.is_object()).cloned(),
+                data.get("quota").filter(|value| value.is_object()).cloned(),
+            ),
+            None => {
+                let profile =
+                    client.profile(&connection.site_url, &secret, connection.legacy_user_id)?;
+                let quota = client
+                    .status(&connection.site_url)
+                    .ok()
+                    .map(|status| quota_from_status(&status, &profile));
+                ("newapi".to_owned(), Some(profile), quota)
+            }
+        };
+        let text = |value: Option<&Value>| {
+            value
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        };
+        let number = |value: Option<&Value>| value.and_then(Value::as_f64);
+        let user = user.as_ref();
+        let user_id = user
+            .and_then(|value| value.get("id"))
+            .and_then(Value::as_i64);
+        let role = match user
+            .and_then(|value| value.get("role"))
+            .and_then(Value::as_i64)
+        {
+            Some(100) => Some("超级管理员".to_owned()),
+            Some(10) => Some("管理员".to_owned()),
+            _ => None,
+        };
+        let status = match user
+            .and_then(|value| value.get("status"))
+            .and_then(Value::as_i64)
+        {
+            Some(1) => Some("正常".to_owned()),
+            Some(_) => Some("已停用".to_owned()),
+            None => None,
+        };
+        Ok(AccountProfile {
+            connection_id: connection.id,
+            provider,
+            kind: connection.kind,
+            site_url: connection.site_url,
+            authenticated: user_id.is_some(),
+            account: connection.account.or_else(|| {
+                user.and_then(|value| text(value.get("display_name")))
+                    .or_else(|| user.and_then(|value| text(value.get("username"))))
+            }),
+            username: user.and_then(|value| text(value.get("username"))),
+            display_name: user.and_then(|value| text(value.get("display_name"))),
+            user_id,
+            email: user.and_then(|value| text(value.get("email"))),
+            role,
+            group: user.and_then(|value| text(value.get("group"))),
+            status,
+            balance: quota
+                .as_ref()
+                .and_then(|value| number(value.get("balance"))),
+            used_quota: quota.as_ref().and_then(|value| number(value.get("used"))),
+            request_count: user
+                .and_then(|value| value.get("request_count"))
+                .and_then(Value::as_i64),
+            quota_display_type: quota
+                .as_ref()
+                .and_then(|value| text(value.get("display_type"))),
+            currency_symbol: quota.as_ref().and_then(|value| text(value.get("symbol"))),
+            quota_per_unit: quota
+                .as_ref()
+                .and_then(|value| number(value.get("quota_per_unit"))),
+            member_since: user
+                .and_then(|value| value.get("created_at"))
+                .and_then(Value::as_i64),
+            expires_at: connection.expires_at,
+            connected: connection.connected,
+        })
+    }
     pub fn models(&self, id: &str) -> AppResult<Vec<String>> {
         let connection = self.connection(id)?;
         let secret = vault::get(&connection.credential_reference())?;
@@ -734,5 +898,51 @@ fn agent_config(
         model: model.into(),
         base_url: base.into(),
         api_key: key.into(),
+    })
+}
+/// Converts the public site status and a generic New API profile into the same
+/// display shape the KunCode desktop endpoint returns.
+fn quota_from_status(status: &Value, profile: &Value) -> Value {
+    let quota = profile.get("quota").and_then(Value::as_i64).unwrap_or(0);
+    let used = profile
+        .get("used_quota")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let per_unit = status
+        .get("quota_per_unit")
+        .and_then(Value::as_f64)
+        .filter(|value| *value > 0.0)
+        .unwrap_or(500_000.0);
+    let display_type = status
+        .get("quota_display_type")
+        .and_then(Value::as_str)
+        .unwrap_or("USD")
+        .to_owned();
+    if display_type == "TOKENS" {
+        return json!({
+            "display_type": "TOKENS",
+            "symbol": "",
+            "balance": quota as f64,
+            "used": used as f64,
+            "quota_per_unit": per_unit,
+        });
+    }
+    let rate = status
+        .get("usd_exchange_rate")
+        .and_then(Value::as_f64)
+        .filter(|value| *value > 0.0)
+        .unwrap_or(1.0);
+    let symbol = status
+        .get("custom_currency_symbol")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(if display_type == "CNY" { "¥" } else { "$" });
+    let convert = |value: i64| value as f64 / per_unit * rate;
+    json!({
+        "display_type": display_type,
+        "symbol": symbol,
+        "balance": convert(quota),
+        "used": convert(used),
+        "quota_per_unit": per_unit,
     })
 }

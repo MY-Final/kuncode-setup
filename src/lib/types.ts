@@ -115,3 +115,28 @@ export interface ConfigurationOutcome {
   binding: ToolBinding;
   steps: ConnectionStep[];
 }
+export interface AccountProfile {
+  connectionId: string;
+  /** 站点类型；newapi 为当前实现，sub2api 等可复用同一契约 */
+  provider: string;
+  kind: ConnectionKind;
+  siteUrl: string;
+  authenticated: boolean;
+  account: string | null;
+  username: string | null;
+  displayName: string | null;
+  userId: number | null;
+  email: string | null;
+  role: string | null;
+  group: string | null;
+  status: string | null;
+  balance: number | null;
+  usedQuota: number | null;
+  requestCount: number | null;
+  quotaDisplayType: string | null;
+  currencySymbol: string | null;
+  quotaPerUnit: number | null;
+  memberSince: number | null;
+  expiresAt: number | null;
+  connected: boolean;
+}

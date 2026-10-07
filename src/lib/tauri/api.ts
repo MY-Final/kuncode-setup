@@ -12,6 +12,7 @@ import type {
   ConnectionStep,
   ImportConnection,
   ConfigurationOutcome,
+  AccountProfile,
 } from "@/lib/types";
 
 /**
@@ -116,6 +117,12 @@ export async function connectionModels(
 ): Promise<string[]> {
   requireDesktop();
   return invoke("connection_models", { connectionId });
+}
+export async function connectionProfile(
+  connectionId: string,
+): Promise<AccountProfile> {
+  requireDesktop();
+  return invoke("connection_profile", { connectionId });
 }
 export async function logoutConnection(
   connectionId: string,

@@ -5,8 +5,8 @@ mod env;
 mod error;
 
 use connections::{
-    ConfigurationOutcome, ConnectionService, ConnectionSnapshot, ConnectionStep, ConnectionSummary,
-    ImportConnection,
+    AccountProfile, ConfigurationOutcome, ConnectionService, ConnectionSnapshot, ConnectionStep,
+    ConnectionSummary, ImportConnection,
 };
 use error::{AppError, AppResult, ErrorPayload};
 use std::sync::Arc;
@@ -95,6 +95,14 @@ async fn connection_models(
 }
 
 #[tauri::command]
+async fn connection_profile(
+    service: State<'_, Arc<ConnectionService>>,
+    connection_id: String,
+) -> Result<AccountProfile, ErrorPayload> {
+    let service = service.inner().clone();
+    blocking(move || service.profile(&connection_id)).await
+}
+#[tauri::command]
 async fn logout_connection(
     service: State<'_, Arc<ConnectionService>>,
     connection_id: String,
@@ -154,6 +162,7 @@ pub fn run() {
             cancel_login,
             import_connection,
             connection_models,
+            connection_profile,
             logout_connection,
             preview_connection_config,
             apply_connection_config,
