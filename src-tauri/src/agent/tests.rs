@@ -62,3 +62,27 @@ fn writes_three_tools_with_independent_sites_and_preserves_existing_settings() {
     );
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn command_resolution_finds_windows_shims_and_falls_back_for_unknown_names() {
+    #[cfg(windows)]
+    {
+        let resolved = super::launch::resolve("cmd");
+        assert!(
+            resolved.is_absolute(),
+            "cmd should resolve to an absolute path"
+        );
+        assert!(
+            resolved
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("exe")),
+            "cmd should resolve to cmd.exe, got {}",
+            resolved.display()
+        );
+    }
+    let missing = super::launch::resolve("kuncode-command-that-does-not-exist");
+    assert_eq!(
+        missing,
+        std::path::PathBuf::from("kuncode-command-that-does-not-exist")
+    );
+}

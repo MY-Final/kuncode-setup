@@ -2,7 +2,9 @@ use crate::env::ToolStatus;
 
 /// 运行一个命令并返回 (stdout, success)。
 fn run_capture(program: &str, args: &[&str]) -> Option<String> {
-    let mut cmd = std::process::Command::new(program);
+    // Windows 上 npm 等 CLI 只有 .cmd 包装脚本，必须使用解析后的绝对路径。
+    let target = which::which(program).unwrap_or_else(|_| std::path::PathBuf::from(program));
+    let mut cmd = std::process::Command::new(target);
     cmd.args(args);
     #[cfg(windows)]
     {
