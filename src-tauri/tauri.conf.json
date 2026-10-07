@@ -13,9 +13,9 @@
     "windows": [
       {
         "title": "KunCode Setup",
-        "width": 1100,
-        "height": 720,
-        "minWidth": 940,
+        "width": 1280,
+        "height": 800,
+        "minWidth": 860,
         "minHeight": 640,
         "resizable": true,
         "center": true

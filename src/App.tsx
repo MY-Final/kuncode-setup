@@ -1,33 +1,53 @@
-import { Routes, Route, Navigate } from "react-router-dom";
+import { lazy, Suspense } from "react";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { Sidebar } from "@/components/layout/sidebar";
+import { AppShell } from "@/components/layout/app-shell";
+import { Toaster } from "@/components/ui/sonner";
+import { PreferencesProvider, usePreferences } from "@/lib/preferences";
 import { AppProvider } from "@/lib/store";
 import HomePage from "@/pages/home";
-import SetupPage from "@/pages/setup";
-import ModelsPage from "@/pages/models";
-import DiagnosePage from "@/pages/diagnose";
-import SettingsPage from "@/pages/settings";
+const SetupPage = lazy(() => import("@/pages/setup"));
+const ModelsPage = lazy(() => import("@/pages/models"));
+const DiagnosePage = lazy(() => import("@/pages/diagnose"));
+const SettingsPage = lazy(() => import("@/pages/settings"));
 
-export default function App() {
+function Application() {
+  const { resolvedTheme } = usePreferences();
+  const location = useLocation();
   return (
     <AppProvider>
       <TooltipProvider>
-        <div className="flex h-screen overflow-hidden">
-          <Sidebar />
-          <main className="bg-background flex-1 overflow-y-auto">
-            <div className="mx-auto max-w-5xl px-8 py-8">
-              <Routes>
-                <Route path="/" element={<HomePage />} />
-                <Route path="/setup/:agent" element={<SetupPage />} />
-                <Route path="/models" element={<ModelsPage />} />
-                <Route path="/diagnose" element={<DiagnosePage />} />
-                <Route path="/settings" element={<SettingsPage />} />
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            </div>
-          </main>
-        </div>
+        <AppShell>
+          <Suspense
+            fallback={
+              <div className="empty-state" role="status">
+                正在加载工作区…
+              </div>
+            }
+          >
+            <Routes>
+              <Route path="/" element={<HomePage />} />
+              <Route
+                path="/setup/:agent"
+                element={<SetupPage key={location.pathname} />}
+              />
+              <Route path="/models" element={<ModelsPage />} />
+              <Route path="/diagnose" element={<DiagnosePage />} />
+              <Route path="/settings" element={<SettingsPage />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
+        </AppShell>
+        <Toaster theme={resolvedTheme} position="bottom-right" closeButton />
       </TooltipProvider>
     </AppProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <PreferencesProvider>
+      <Application />
+    </PreferencesProvider>
   );
 }
