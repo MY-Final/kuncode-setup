@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import * as api from "@/lib/tauri/api";
+import { errorMessage } from "@/lib/utils";
 import type {
   AgentConfig,
   AgentMeta,
@@ -16,12 +17,14 @@ import type {
 } from "@/lib/types";
 
 interface AppState {
+  configurations: Record<string, { model: string; demo: boolean }>;
+  recordConfiguration: (agentId: string, model: string, demo: boolean) => void;
   environment: EnvironmentReport | null;
   agents: AgentMeta[];
   session: Session | null;
   loading: boolean;
   error: string | null;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<boolean>;
   login: (account: string) => void;
   logout: () => void;
   /** 当前正在配置的 Agent（用于跨页面流程） */
@@ -40,6 +43,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<AgentConfig | null>(null);
+  const [configurations, setConfigurations] = useState<
+    Record<string, { model: string; demo: boolean }>
+  >({});
+  const recordConfiguration = useCallback(
+    (agentId: string, model: string, demo: boolean) => {
+      setConfigurations((previous) => ({
+        ...previous,
+        [agentId]: { model, demo },
+      }));
+    },
+    [],
+  );
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -51,8 +66,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ]);
       setEnvironment(env);
       setAgents(list);
+      return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
+      return false;
     } finally {
       setLoading(false);
     }
@@ -63,10 +80,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const login = useCallback((account: string) => {
-    setSession({ account, balance: "¥18.32" });
+    setSession({ account, balance: "未接入" });
   }, []);
 
-  const logout = useCallback(() => setSession(null), []);
+  const logout = useCallback(() => {
+    setSession(null);
+    setDraft(null);
+  }, []);
 
   const value = useMemo<AppState>(
     () => ({
@@ -80,6 +100,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       logout,
       draft,
       setDraft,
+      configurations,
+      recordConfiguration,
     }),
     [
       environment,
@@ -91,6 +113,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       login,
       logout,
       draft,
+      configurations,
+      recordConfiguration,
     ],
   );
 

@@ -32,31 +32,41 @@ export async function listAgents(): Promise<AgentMeta[]> {
 
 export async function previewConfig(
   config: AgentConfig,
+  demo = false,
 ): Promise<ConfigPreview> {
-  if (!isTauri()) return mock.mockPreviewConfig(config);
+  if (demo || !isTauri()) return mock.mockPreviewConfig(config);
   return invoke<ConfigPreview>("preview_config", {
     agentId: config.agentId,
     config,
   });
 }
 
-export async function applyConfig(config: AgentConfig): Promise<StepResult[]> {
-  if (!isTauri()) return mock.mockApplyConfig();
+export async function applyConfig(
+  config: AgentConfig,
+  demo = false,
+): Promise<StepResult[]> {
+  if (demo || !isTauri()) return mock.mockApplyConfig(config);
   return invoke<StepResult[]>("apply_config", {
     agentId: config.agentId,
     config,
   });
 }
 
-export async function testConnection(config: AgentConfig): Promise<TestResult> {
-  if (!isTauri()) return mock.mockTestConnection();
+export async function testConnection(
+  config: AgentConfig,
+  demo = false,
+): Promise<TestResult> {
+  if (demo || !isTauri()) return mock.mockTestConnection();
   return invoke<TestResult>("test_connection", {
     agentId: config.agentId,
     config,
   });
 }
 
-export async function launchAgent(agentId: string): Promise<string> {
-  if (!isTauri()) return mock.mockLaunchAgent(agentId);
+export async function launchAgent(
+  agentId: string,
+  demo = false,
+): Promise<string> {
+  if (demo || !isTauri()) return mock.mockLaunchAgent(agentId);
   return invoke<string>("launch_agent", { agentId });
 }
