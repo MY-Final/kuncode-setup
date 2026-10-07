@@ -1,0 +1,33 @@
+[package]
+name = "kuncode-setup"
+version = "0.1.0"
+description = "KunCode Setup — AI Coding Agent 配置助手"
+authors = ["KunCode"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "kuncode_setup_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+dirs = "6"
+which = "8"
+toml = "0.9"
+chrono = { version = "0.4", features = ["serde"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

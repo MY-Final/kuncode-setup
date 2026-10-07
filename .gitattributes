@@ -1,0 +1,41 @@
+# 统一换行符：仓库内一律使用 LF，检出时由 git 按平台处理
+* text=auto eol=lf
+
+# 明确的文本文件
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.js    text eol=lf
+*.jsx   text eol=lf
+*.json  text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.md    text eol=lf
+*.rs    text eol=lf
+*.toml  text eol=lf
+
+# Windows 脚本保留 CRLF
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# 二进制文件不要自动转换
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.icns  binary
+*.webp  binary
+
+# 锁文件：视为生成物，折叠 diff
+pnpm-lock.yaml  -diff linguist-generated
+Cargo.lock      -diff linguist-generated
+
+# 语言标注
+*.rs    linguist-language=Rust
+*.tsx   linguist-language=TypeScript
+*.ts    linguist-language=TypeScript
+
+# Husky 钩子必须使用 LF
+.husky/* text eol=lf
+
