@@ -8,6 +8,7 @@ import { ConnectionDialog } from "@/components/connection-dialog";
 import { ToolList } from "@/components/tool-list";
 import SetupPage from "@/pages/setup";
 import SettingsPage from "@/pages/settings";
+import { AccountPanel } from "@/components/account-panel";
 import { PreferencesProvider } from "@/lib/preferences";
 import type {
   ConnectionSnapshot,
@@ -126,6 +127,31 @@ beforeEach(() => {
       );
       return null;
     }
+    if (command === "connection_profile")
+      return {
+        connectionId: args.connectionId,
+        provider: "newapi",
+        kind: "kuncode_authorized",
+        siteUrl: official.siteUrl,
+        authenticated: true,
+        account: "owner",
+        username: "owner",
+        displayName: "Owner",
+        userId: 1,
+        email: "owner@example.com",
+        role: null,
+        group: "default",
+        status: "正常",
+        balance: 12.5,
+        usedQuota: 3.25,
+        requestCount: 42,
+        quotaDisplayType: "USD",
+        currencySymbol: "$",
+        quotaPerUnit: 500000,
+        memberSince: 1700000000,
+        expiresAt: 2000000000,
+        connected: true,
+      };
     if (command === "probe_tool_connection")
       return { ok: true, message: "已检查模型列表", latencyMs: 1 };
     if (command === "launch_agent") return "已启动";
@@ -315,4 +341,43 @@ it("设置可保存本地授权地址，登录显示新地址且保留已有工�
     await screen.findByText("授权服务：http://127.0.0.1:3000"),
   ).toBeInTheDocument();
   vi.unstubAllGlobals();
+});
+
+it("账户菜单展示站点真实用户信息而不是跳转设置", async () => {
+  snapshot.connections.push(official);
+  snapshot.currentOfficial = official.id;
+  render(
+    <AppProvider>
+      <AccountPanel
+        open
+        onOpenChange={() => undefined}
+        onLogin={() => undefined}
+      />
+    </AppProvider>,
+  );
+  expect(await screen.findByText("Owner")).toBeInTheDocument();
+  expect(screen.getByText("@owner · default 分组")).toBeInTheDocument();
+  expect(screen.getByText("$12.50")).toBeInTheDocument();
+  expect(screen.getByText("$3.25")).toBeInTheDocument();
+  expect(screen.getByText("42")).toBeInTheDocument();
+  expect(screen.getByText(official.siteUrl)).toBeInTheDocument();
+  expect(native.invoke).toHaveBeenCalledWith("connection_profile", {
+    connectionId: official.id,
+  });
+});
+
+it("未登录时账户面板提供登录入口", async () => {
+  render(
+    <AppProvider>
+      <AccountPanel
+        open
+        onOpenChange={() => undefined}
+        onLogin={() => undefined}
+      />
+    </AppProvider>,
+  );
+  expect(await screen.findByText("尚未登录 KunCode")).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "登录 KunCode" }),
+  ).toBeInTheDocument();
 });
