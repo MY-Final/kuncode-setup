@@ -1,403 +1,493 @@
-import { useMemo, useState } from "react";
+import { useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
+  ArrowRight,
   CheckCircle2,
+  CircleAlert,
+  FlaskConical,
   Loader2,
-  Lock,
-  Rocket,
   ShieldCheck,
-  XCircle,
+  Terminal,
+  KeyRound,
+  Play,
 } from "lucide-react";
+import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/page-header";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AgentIcon } from "@/components/agent-icon";
+import { SetupStepper } from "@/components/setup/stepper";
+import { ConfigurationPreview } from "@/components/setup/config-preview";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
-import { Separator } from "@/components/ui/separator";
 import { useApp } from "@/lib/store";
 import * as api from "@/lib/tauri/api";
-import type { ConfigPreview, StepResult } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import {
+  DEFAULT_MODEL,
+  DEFAULT_BASE_URL,
+  DEMO_MODELS,
+} from "@/lib/data/models";
+import type { AgentConfig, ConfigPreview, StepResult } from "@/lib/types";
+import { errorMessage } from "@/lib/utils";
 
-type Stage = "login" | "preview" | "applying" | "done";
-
+type Stage = "connect" | "preview" | "applying" | "done";
 export default function SetupPage() {
   const { agent: agentId = "codex" } = useParams();
-  const { agents, session, login, draft } = useApp();
-  const agent = useMemo(
-    () => agents.find((a) => a.id === agentId),
-    [agents, agentId],
+  const {
+    agents,
+    loading,
+    session,
+    login,
+    draft,
+    setDraft,
+    recordConfiguration,
+  } = useApp();
+  const agent = agents.find((a) => a.id === agentId);
+  const matchingDraft = draft?.agentId === agentId ? draft : null;
+  const [stage, setStage] = useState<Stage>("connect");
+  const [demo, setDemo] = useState(true);
+  const [account, setAccount] = useState(session?.account ?? "演示用户");
+  const [model, setModel] = useState(matchingDraft?.model ?? DEFAULT_MODEL);
+  const [baseUrl, setBaseUrl] = useState(
+    matchingDraft?.baseUrl ?? DEFAULT_BASE_URL,
   );
-
-  const [stage, setStage] = useState<Stage>(session ? "preview" : "login");
-  const [account, setAccount] = useState("");
-  const [password, setPassword] = useState("");
-  const [model] = useState(draft?.model ?? "gpt-5.6-luna");
+  const [apiKey, setApiKey] = useState("");
   const [preview, setPreview] = useState<ConfigPreview | null>(null);
   const [steps, setSteps] = useState<StepResult[]>([]);
-  const [progress, setProgress] = useState(0);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [launched, setLaunched] = useState<string | null>(null);
+  const [launched, setLaunched] = useState(false);
   const navigate = useNavigate();
-
-  const config = {
+  const config: AgentConfig = {
     agentId,
-    model,
-    baseUrl: draft?.baseUrl ?? "https://api.kuncode.ai/v1",
-    apiKey: draft?.apiKey ?? "sk-kuncode-demo-key-1234",
+    model: model.trim(),
+    baseUrl: baseUrl.trim().replace(/\/+$/, ""),
+    apiKey: demo ? "" : apiKey.trim(),
   };
-
-  async function handleLogin(e: React.FormEvent) {
-    e.preventDefault();
+  const success = steps.length > 0 && steps.every((s) => s.ok);
+  const wrote = steps.some((s) => s.step === "写入配置" && s.ok);
+  const safeError = (e: unknown) => {
+    const message = errorMessage(e);
+    return apiKey.trim()
+      ? message.split(apiKey.trim()).join("[凭据已隐藏]")
+      : message;
+  };
+  async function handlePreview(event: FormEvent) {
+    event.preventDefault();
     setError(null);
-    // MVP：登录 + Setup Token 由服务端 API 完成。
-    // 这里先落地客户端流程骨架，真实鉴权接入 /api/setup/auth。
-    if (!account.trim()) {
-      setError("请输入账号");
-      return;
+    if (!demo) {
+      if (!config.apiKey || !config.model) {
+        setError("请输入模型 ID 与 API Key。");
+        return;
+      }
+      try {
+        const url = new URL(config.baseUrl);
+        if (
+          !["http:", "https:"].includes(url.protocol) ||
+          url.username ||
+          url.password
+        )
+          throw new Error();
+      } catch {
+        setError(
+          "请输入有效的 HTTP / HTTPS 服务地址，且不要在地址中包含凭据。",
+        );
+        return;
+      }
     }
-    login(account.trim());
-    setStage("preview");
+    setBusy(true);
     try {
-      const p = await api.previewConfig(config);
-      setPreview(p);
+      const value = await api.previewConfig(config, demo);
+      setPreview(value);
+      setStage("preview");
+      if (demo) login(account.trim() || "演示用户");
+      setDraft(config);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(safeError(e));
+    } finally {
+      setBusy(false);
     }
   }
-
-  async function handleApply() {
+  async function apply() {
+    if (busy || (!demo && !agent?.installed)) return;
+    setBusy(true);
     setStage("applying");
     setError(null);
     setSteps([]);
-    setProgress(10);
     try {
-      const result = await api.applyConfig(config);
+      const result = await api.applyConfig(config, demo);
       setSteps(result);
-      setProgress(100);
-      if (result.every((s) => s.ok)) {
-        setStage("done");
-      } else {
-        setError("配置过程中出现问题，原配置已保留，可恢复备份后重试。");
-        setStage("preview");
+      setStage("done");
+      if (result.some((s) => s.step === "写入配置" && s.ok))
+        recordConfiguration(agentId, config.model, demo);
+      if (result.length > 0 && result.every((s) => s.ok))
+        toast.success(demo ? "演示配置已完成" : "配置完成，连接测试通过");
+      else {
+        setError("部分步骤未完成，请查看下方结果。备份恢复界面尚未接入。");
+        toast.error("配置未全部完成");
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(safeError(e));
       setStage("preview");
+    } finally {
+      setBusy(false);
     }
   }
-
-  async function handleLaunch() {
+  async function launch() {
+    setBusy(true);
     try {
-      const msg = await api.launchAgent(agentId);
-      setLaunched(msg);
+      const message = await api.launchAgent(agentId, demo);
+      setLaunched(true);
+      toast.success(message);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(safeError(e));
+    } finally {
+      setBusy(false);
     }
   }
-
-  if (!agent) {
-    return (
-      <div className="max-w-xl">
-        <Alert variant="destructive">
-          <AlertTitle>未知的 Agent</AlertTitle>
-          <AlertDescription>
-            找不到「{agentId}」，请返回首页重新选择。
-          </AlertDescription>
-        </Alert>
-        <Button
-          className="mt-4"
-          variant="outline"
-          onClick={() => navigate("/")}
-        >
-          <ArrowLeft className="size-4" /> 返回首页
-        </Button>
-      </div>
-    );
+  async function retest() {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api.testConnection(config, demo);
+      setSteps((previous) => [
+        ...previous.filter((s) => s.step !== "测试连接"),
+        { step: "测试连接", ok: result.ok, detail: result.message },
+      ]);
+      if (result.ok) toast.success(result.message);
+      else toast.error(result.message);
+    } catch (e) {
+      setError(safeError(e));
+    } finally {
+      setBusy(false);
+    }
   }
-
+  if (!agent)
+    return (
+      <>
+        <PageHeader
+          title={loading ? "正在检测工具…" : "未找到这个工具"}
+          description={
+            loading
+              ? "正在准备本机工具信息。"
+              : "请返回工作台，重新选择需要配置的工具。"
+          }
+        />
+        <Button variant="outline" onClick={() => navigate("/")}>
+          <ArrowLeft />
+          返回工作台
+        </Button>
+      </>
+    );
   return (
-    <div className="max-w-2xl">
+    <>
       <PageHeader
         title={`配置 ${agent.name}`}
-        description={agent.description}
+        description="从连接到就绪，每一步都清晰可见。"
         actions={
-          <Button variant="ghost" size="sm" asChild>
-            <Link to="/">
-              <ArrowLeft className="size-4" /> 返回
+          <Button
+            asChild
+            variant="ghost"
+            size="sm"
+            disabled={stage === "applying"}
+          >
+            <Link
+              to="/models"
+              onClick={(e) => {
+                if (stage === "applying") e.preventDefault();
+              }}
+            >
+              <ArrowLeft />
+              返回工具配置
             </Link>
           </Button>
         }
       />
-
-      {/* Stepper */}
-      <div className="mb-6 flex items-center gap-2 text-xs">
-        {(["login", "preview", "applying", "done"] as Stage[]).map((s, i) => {
-          const labels = {
-            login: "登录",
-            preview: "确认",
-            applying: "写入",
-            done: "完成",
-          };
-          const order = ["login", "preview", "applying", "done"];
-          const active = order.indexOf(stage) >= i;
-          return (
-            <div key={s} className="flex flex-1 items-center gap-2">
-              <span
-                className={cn(
-                  "flex size-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold",
-                  active
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-secondary text-muted-foreground",
-                )}
-              >
-                {i + 1}
-              </span>
-              <span
-                className={cn(
-                  active
-                    ? "text-foreground font-medium"
-                    : "text-muted-foreground",
-                )}
-              >
-                {labels[s]}
-              </span>
-              {i < 3 && (
-                <span
-                  className={cn(
-                    "h-px flex-1",
-                    active ? "bg-primary/40" : "bg-border",
-                  )}
-                />
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {error && (
-        <Alert variant="destructive" className="mb-4">
-          <XCircle />
-          <AlertTitle>出错了</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
-
-      {stage === "login" && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">登录 KunCode</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="account">账号</Label>
-                <Input
-                  id="account"
-                  value={account}
-                  onChange={(e) => setAccount(e.target.value)}
-                  placeholder="你的 KunCode 账号"
-                  autoComplete="username"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="password">密码</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  autoComplete="current-password"
-                />
-              </div>
-              <Button type="submit" className="w-full">
-                <Lock className="size-4" /> 登录
-              </Button>
-              <div className="text-muted-foreground flex items-center gap-3 text-xs">
-                <Separator className="flex-1" />
-                或
-                <Separator className="flex-1" />
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                disabled
-              >
-                使用浏览器授权（即将支持）
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-      )}
-
-      {stage === "preview" && (
-        <Card>
-          <CardHeader className="flex-row items-center justify-between">
-            <CardTitle className="text-base">准备配置 {agent.name}</CardTitle>
-            <Badge variant="secondary">
-              <ShieldCheck className="size-3" /> 自动备份
-            </Badge>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-3">
-              <PreviewRow label="Provider" value="KunCode" />
-              <Separator />
-              <PreviewRow
-                label="Base URL"
-                value={preview?.baseUrl ?? config.baseUrl}
-                mono
-              />
-              <Separator />
-              <PreviewRow label="模型" value={preview?.model ?? model} />
-              <Separator />
-              <PreviewRow
-                label="API Key"
-                value={preview?.maskedApiKey ?? "sk-••••••••1234"}
-                mono
-              />
-              <Separator />
-              <PreviewRow
-                label="配置文件"
-                value={preview?.configPath ?? "待检测"}
-                mono
-              />
-            </div>
-
-            <Alert>
-              <CheckCircle2 className="text-success" />
-              <AlertTitle>原配置将自动备份</AlertTitle>
-              <AlertDescription>
-                {preview?.existingConfig
-                  ? `检测到已有配置，将备份到 ${preview.backupPath}`
-                  : "未检测到原配置，将直接创建新配置。"}
-              </AlertDescription>
-            </Alert>
-
-            <div className="flex justify-between gap-3 pt-1">
-              <Button variant="outline" onClick={() => setStage("login")}>
-                <ArrowLeft className="size-4" /> 返回
-              </Button>
-              <Button onClick={handleApply}>
-                <Rocket className="size-4" /> 开始配置
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {stage === "applying" && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">正在配置 {agent.name}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Progress value={progress} />
-            <div className="space-y-2.5">
-              {steps.length === 0 ? (
-                <div className="text-muted-foreground flex items-center gap-2 text-sm">
-                  <Loader2 className="size-4 animate-spin" /> 正在执行…
-                </div>
-              ) : (
-                steps.map((s) => (
-                  <div
-                    key={s.step}
-                    className="flex items-start gap-2.5 text-sm"
-                  >
-                    {s.ok ? (
-                      <CheckCircle2 className="text-success mt-0.5 size-4 shrink-0" />
-                    ) : (
-                      <XCircle className="text-destructive mt-0.5 size-4 shrink-0" />
-                    )}
-                    <div className="min-w-0">
-                      <div className="font-medium">{s.step}</div>
-                      {s.detail && (
-                        <div className="text-muted-foreground mt-0.5 truncate font-mono text-[11px]">
-                          {s.detail}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {stage === "done" && (
-        <Card>
-          <CardContent className="space-y-5 p-8 text-center">
-            <div className="bg-success/10 mx-auto flex size-14 items-center justify-center rounded-full">
-              <CheckCircle2 className="text-success size-7" />
-            </div>
-            <div>
-              <h2 className="text-lg font-semibold">
-                🎉 {agent.name} 配置完成
-              </h2>
-              <p className="text-muted-foreground mt-1 text-sm">
-                KunCode API 正常 · {model} 可用
-              </p>
-            </div>
-
-            <div className="bg-secondary/50 mx-auto max-w-sm space-y-2 rounded-lg p-4 text-left text-sm">
-              {steps.map((s) => (
-                <div key={s.step} className="flex items-center justify-between">
-                  <span className="text-muted-foreground">{s.step}</span>
-                  <span className="flex items-center gap-1.5 font-medium">
-                    {s.ok ? (
-                      <CheckCircle2 className="text-success size-3.5" />
-                    ) : (
-                      <XCircle className="text-destructive size-3.5" />
-                    )}
-                    {s.ok ? "成功" : "失败"}
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            {launched && <p className="text-success text-xs">{launched}</p>}
-
-            <div className="flex justify-center gap-3">
-              <Button variant="outline" onClick={() => navigate("/")}>
-                返回首页
-              </Button>
-              <Button onClick={handleLaunch}>
-                <Rocket className="size-4" /> 启动 {agent.name}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-    </div>
-  );
-}
-
-function PreviewRow({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-4 text-sm">
-      <span className="text-muted-foreground shrink-0">{label}</span>
-      <span
-        className={cn(
-          "truncate text-right font-medium",
-          mono && "font-mono text-xs",
+      <div className="setup-container">
+        <SetupStepper
+          step={stage === "connect" ? 0 : stage === "preview" ? 1 : 2}
+        />
+        {error && (
+          <div className="inline-error" role="alert">
+            <CircleAlert />
+            {error}
+          </div>
         )}
-      >
-        {value}
-      </span>
-    </div>
+        <section
+          className={`setup-surface ${stage === "preview" ? "setup-preview-surface" : ""}`}
+        >
+          {stage === "connect" && (
+            <>
+              <div className="setup-tool-head">
+                <AgentIcon id={agent.id} />
+                <div>
+                  <h2>{agent.name}</h2>
+                  <p>选择连接方式，准备你的配置。</p>
+                </div>
+              </div>
+              <Tabs
+                value={demo ? "demo" : "native"}
+                onValueChange={(value) => {
+                  setDemo(value === "demo");
+                  setError(null);
+                }}
+                className="connection-tabs"
+              >
+                <TabsList>
+                  <TabsTrigger
+                    value="demo"
+                    id="connection-demo"
+                    aria-controls="connection-panel"
+                  >
+                    <FlaskConical />
+                    演示体验
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="native"
+                    id="connection-native"
+                    aria-controls="connection-panel"
+                    disabled={!api.isTauri()}
+                  >
+                    <KeyRound />
+                    本机配置{!api.isTauri() && " · 桌面端可用"}
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
+              <form
+                onSubmit={handlePreview}
+                className="connection-form"
+                id="connection-panel"
+                role="tabpanel"
+                aria-labelledby={demo ? "connection-demo" : "connection-native"}
+              >
+                <div className="mode-notice">
+                  {demo ? (
+                    <>
+                      <FlaskConical />
+                      <p>
+                        <strong>先体验完整流程，无需真实凭据</strong>
+                        <span>
+                          登录服务尚未接入。此模式不会修改文件或发送请求。
+                        </span>
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <ShieldCheck />
+                      <p>
+                        <strong>使用你自己的 KunCode 连接信息</strong>
+                        <span>仅调用本机 Rust 能力，不使用演示凭据。</span>
+                      </p>
+                    </>
+                  )}
+                </div>
+                {demo ? (
+                  <div className="form-field">
+                    <Label htmlFor="demo-account">演示显示名称</Label>
+                    <Input
+                      id="demo-account"
+                      value={account}
+                      onChange={(e) => setAccount(e.target.value)}
+                      maxLength={40}
+                      placeholder="例如：开发者"
+                    />
+                    <small>仅用于演示会话，不是实际账户登录。</small>
+                  </div>
+                ) : (
+                  <div className="form-field">
+                    <Label htmlFor="base-url">服务地址</Label>
+                    <Input
+                      id="base-url"
+                      value={baseUrl}
+                      onChange={(e) => setBaseUrl(e.target.value)}
+                      placeholder={DEFAULT_BASE_URL}
+                      required
+                    />
+                  </div>
+                )}
+                <div className="form-field">
+                  <Label htmlFor="setup-model">
+                    {demo ? "配置模型" : "模型 ID"}
+                  </Label>
+                  {demo ? (
+                    <Select value={model} onValueChange={setModel}>
+                      <SelectTrigger id="setup-model" className="w-full">
+                        <SelectValue placeholder="选择模型" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {DEMO_MODELS.map((m) => (
+                          <SelectItem key={m.id} value={m.id}>
+                            {m.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <Input
+                      id="setup-model"
+                      value={model}
+                      onChange={(e) => setModel(e.target.value)}
+                      placeholder="填写服务端实际支持的模型 ID"
+                      required
+                    />
+                  )}
+                  <small>
+                    {demo
+                      ? "演示模型目录，不代表服务端实时可用性。"
+                      : "请使用账户实际支持的模型 ID。上一步目录仅供演示。"}
+                  </small>
+                </div>
+                {!demo && (
+                  <div className="form-field">
+                    <Label htmlFor="api-key">API Key</Label>
+                    <Input
+                      id="api-key"
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      type="password"
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="输入你的 API Key"
+                      required
+                    />
+                    <small>
+                      仅在内存中使用；写入时保存到所选工具的本机配置。
+                    </small>
+                  </div>
+                )}
+                <div className="setup-form-footer">
+                  <span>
+                    <ShieldCheck />
+                    确认前不修改文件
+                  </span>
+                  <Button type="submit" disabled={busy}>
+                    {busy ? <Loader2 className="animate-spin" /> : null}预览配置{" "}
+                    <ArrowRight />
+                  </Button>
+                </div>
+              </form>
+            </>
+          )}
+          {stage === "preview" && preview && (
+            <>
+              <div className="setup-preview-body">
+                <ConfigurationPreview preview={preview} demo={demo} />
+                {!demo && !agent.installed && (
+                  <p className="inline-error">
+                    尚未检测到 {agent.name}
+                    。请先安装工具，再回到系统诊断重新检测。
+                  </p>
+                )}
+              </div>
+              <div className="setup-form-footer">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setStage("connect");
+                    setError(null);
+                  }}
+                >
+                  <ArrowLeft />
+                  调整配置
+                </Button>
+                <Button
+                  onClick={apply}
+                  disabled={busy || (!demo && !agent.installed)}
+                >
+                  {demo ? <Play /> : <ShieldCheck />}
+                  {demo ? "运行演示配置" : "备份并写入配置"}
+                </Button>
+              </div>
+            </>
+          )}
+          {stage === "applying" && (
+            <div className="applying-state">
+              <Loader2 className="animate-spin" />
+              <h2>{demo ? "正在运行演示流程" : "正在配置工具"}</h2>
+              <p>检查工具、备份配置并验证连接，请稍候。</p>
+              <Progress value={undefined} className="indeterminate-progress" />
+              <small>
+                {demo ? "不会改动本机文件" : "请保持窗口打开，等待结果"}
+              </small>
+            </div>
+          )}
+          {stage === "done" && (
+            <>
+              <div className={`result-heading ${success ? "success" : ""}`}>
+                {success ? <CheckCircle2 /> : <CircleAlert />}
+                <h2>
+                  {success
+                    ? demo
+                      ? "演示配置完成"
+                      : `${agent.name} 已准备就绪`
+                    : wrote
+                      ? "配置已写入，请检查连接"
+                      : "配置尚未完成"}
+                </h2>
+                <p>
+                  {demo
+                    ? "你已体验完整配置流程，本机文件未被修改。"
+                    : `${agent.name} · ${config.model}`}
+                </p>
+              </div>
+              <div className="result-steps">
+                {steps.map((step) => (
+                  <div key={step.step}>
+                    {step.ok ? (
+                      <CheckCircle2 className="text-success" />
+                    ) : (
+                      <CircleAlert className="text-destructive" />
+                    )}
+                    <div>
+                      <strong>{step.step}</strong>
+                      <p>{step.detail ?? "完成"}</p>
+                    </div>
+                    <span>{step.ok ? "完成" : "需处理"}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="setup-form-footer">
+                <Button variant="outline" onClick={() => navigate("/")}>
+                  返回工作台
+                </Button>
+                {success ? (
+                  <Button onClick={launch} disabled={busy}>
+                    {busy ? <Loader2 className="animate-spin" /> : <Terminal />}
+                    {launched
+                      ? "再次启动"
+                      : demo
+                        ? "演示启动工具"
+                        : `启动 ${agent.name}`}
+                  </Button>
+                ) : wrote ? (
+                  <Button onClick={retest} disabled={busy}>
+                    {busy && <Loader2 className="animate-spin" />}重新测试连接
+                  </Button>
+                ) : (
+                  <Button onClick={() => setStage("preview")}>
+                    返回配置预览
+                  </Button>
+                )}
+              </div>
+            </>
+          )}
+        </section>
+        <p className="page-footnote">
+          <ShieldCheck />
+          {demo
+            ? "演示体验独立于本机能力，随时可以重新配置。"
+            : "已有配置由 Rust 自动备份。首版暂不提供备份恢复界面。"}
+        </p>
+      </div>
+    </>
   );
 }
