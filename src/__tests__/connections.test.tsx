@@ -48,6 +48,16 @@ const other: ConnectionSummary = {
   userId: null,
   expiresAt: null,
 };
+const manual: ConnectionSummary = {
+  ...official,
+  id: "manual-1",
+  kind: "newapi_pat",
+  siteUrl: "https://other.example",
+  apiBaseUrl: "https://other.example/v1",
+  account: "manual-owner",
+  userId: 9,
+  expiresAt: null,
+};
 
 beforeEach(() => {
   Object.defineProperty(window, "__TAURI_INTERNALS__", {
@@ -399,6 +409,105 @@ it("账户菜单点击后打开账户面板且不跳转设置", async () => {
   expect(
     screen.queryByRole("heading", { name: "设置" }),
   ).not.toBeInTheDocument();
+});
+
+it("手动用户 Token 连接也能在账户面板展示资料", async () => {
+  snapshot.connections.push(manual);
+  snapshot.currentOfficial = null;
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === "list_connections") return structuredClone(snapshot);
+    if (command === "detect_environment")
+      return { os: "Windows", arch: "x86_64", tools: [] };
+    if (command === "list_agents") return [];
+    if (command === "connection_profile")
+      return {
+        connectionId: args.connectionId,
+        provider: "newapi",
+        kind: "newapi_pat",
+        siteUrl: manual.siteUrl,
+        authenticated: true,
+        account: "manual-owner",
+        username: "manual-owner",
+        displayName: "Manual Owner",
+        userId: 9,
+        email: null,
+        role: null,
+        group: "default",
+        status: "正常",
+        balance: 4,
+        usedQuota: 1,
+        requestCount: 3,
+        quotaDisplayType: "USD",
+        currencySymbol: "$",
+        quotaPerUnit: 500000,
+        memberSince: null,
+        expiresAt: null,
+        connected: true,
+      };
+    return null;
+  });
+  render(
+    <AppProvider>
+      <AccountPanel
+        open
+        onOpenChange={() => undefined}
+        onLogin={() => undefined}
+      />
+    </AppProvider>,
+  );
+  expect(await screen.findByText("Manual Owner")).toBeInTheDocument();
+  expect(native.invoke).toHaveBeenCalledWith("connection_profile", {
+    connectionId: manual.id,
+  });
+  expect(screen.queryByText("尚未登录 KunCode")).not.toBeInTheDocument();
+});
+
+it("API Key 连接不显示为已登录账户", async () => {
+  snapshot.connections.push(other);
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === "list_connections") return structuredClone(snapshot);
+    if (command === "detect_environment")
+      return { os: "Windows", arch: "x86_64", tools: [] };
+    if (command === "list_agents") return [];
+    if (command === "connection_profile")
+      return {
+        connectionId: args.connectionId,
+        provider: "openai_compatible",
+        kind: "api_key",
+        siteUrl: other.siteUrl,
+        authenticated: false,
+        account: null,
+        username: null,
+        displayName: null,
+        userId: null,
+        email: null,
+        role: null,
+        group: null,
+        status: null,
+        balance: null,
+        usedQuota: null,
+        requestCount: null,
+        quotaDisplayType: null,
+        currencySymbol: null,
+        quotaPerUnit: null,
+        memberSince: null,
+        expiresAt: null,
+        connected: true,
+      };
+    return null;
+  });
+  render(
+    <AppProvider>
+      <AccountPanel
+        open
+        onOpenChange={() => undefined}
+        onLogin={() => undefined}
+      />
+    </AppProvider>,
+  );
+  expect(await screen.findByText("模型服务")).toBeInTheDocument();
+  expect(screen.getByText("模型服务连接")).toBeInTheDocument();
+  expect(screen.queryByText("尚未登录 KunCode")).not.toBeInTheDocument();
 });
 
 it("未登录时账户面板提供登录入口", async () => {

@@ -63,7 +63,21 @@ export function AccountPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
-  const connectionId = session?.connectionId ?? null;
+  // 浏览器授权连接优先；手动用户 Token 连接同样可以展示账户资料。
+  const activeConnection =
+    connections.find(
+      (connection) =>
+        connection.id === session?.connectionId && connection.connected,
+    ) ??
+    connections.find(
+      (connection) => connection.connected && connection.kind !== "api_key",
+    ) ??
+    connections.find((connection) => connection.connected) ??
+    null;
+  const connectionId = activeConnection?.id ?? null;
+  const isOfficialAccount =
+    !!session && session.connectionId === activeConnection?.id;
+  const isServiceOnly = activeConnection?.kind === "api_key";
 
   useEffect(() => {
     if (!open) return;
@@ -110,7 +124,8 @@ export function AccountPanel({
     try {
       const warning = await logout(connectionId);
       if (warning) toast.warning(warning);
-      else toast.success("已退出，工具配置已保留");
+      else if (isOfficialAccount) toast.success("已退出，工具配置已保留");
+      else toast.success("本机已断开，工具配置和工具密钥已保留");
       onOpenChange(false);
     } catch (value) {
       toast.error(errorMessage(value));
@@ -121,7 +136,7 @@ export function AccountPanel({
 
   const otherConnections = connections.filter(
     (connection) =>
-      connection.connected && connection.id !== session?.connectionId,
+      connection.connected && connection.id !== activeConnection?.id,
   );
   const displayName =
     profile?.displayName ||
@@ -144,9 +159,11 @@ export function AccountPanel({
               : "KunCode 账户"}
           </DialogTitle>
           <DialogDescription>
-            {connectionId
-              ? "当前登录的账户信息，来自站点实际数据。"
-              : "登录 KunCode 后即可查看账户信息并配置工具。"}
+            {!connectionId
+              ? "登录 KunCode 后即可查看账户信息并配置工具。"
+              : isServiceOnly
+                ? "当前是模型服务连接，仅展示服务状态。"
+                : "当前连接的账户信息，来自站点实际数据。"}
           </DialogDescription>
         </DialogHeader>
 
@@ -159,7 +176,11 @@ export function AccountPanel({
               <div>
                 <strong>{displayName ?? "KunCode 用户"}</strong>
                 <p>
-                  {profile?.username ? `@${profile.username}` : "已登录"}
+                  {isServiceOnly
+                    ? "模型服务连接"
+                    : profile?.username
+                      ? `@${profile.username}`
+                      : "已连接"}
                   {profile?.group ? ` · ${profile.group} 分组` : ""}
                 </p>
               </div>
@@ -254,7 +275,11 @@ export function AccountPanel({
                 disabled={signingOut}
               >
                 <LogOut aria-hidden="true" />
-                {signingOut ? "退出中…" : "退出登录"}
+                {signingOut
+                  ? "处理中…"
+                  : isOfficialAccount
+                    ? "退出登录"
+                    : "断开连接"}
               </Button>
             </div>
           </>
