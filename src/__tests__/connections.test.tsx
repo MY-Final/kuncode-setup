@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
@@ -186,6 +186,16 @@ beforeEach(() => {
         expiresAt: 2000000000,
         connected: true,
       };
+    if (command === "check_tool_connection")
+      return {
+        agentId: args.agentId,
+        ok: true,
+        reason: "ok",
+        needsRebind: false,
+        message: "本机配置与站点密钥一致",
+      };
+    if (command === "restore_tool_config")
+      return { agentId: args.agentId, restored: [], missing: [] };
     if (command === "probe_tool_connection")
       return { ok: true, message: "已检查模型列表", latencyMs: 1 };
     if (command === "launch_agent") return "已启动";
@@ -341,9 +351,47 @@ it("退出 Setup 账户保留独立工具绑定并允许继续启动", async () 
     await screen.findByRole("heading", { name: "Codex 已启动" }),
   ).toBeInTheDocument();
   expect(snapshot.bindings.codex.status).toBe("ready");
-  expect(native.invoke).toHaveBeenCalledWith("probe_tool_connection", {
+  expect(native.invoke).toHaveBeenCalledWith("check_tool_connection", {
     agentId: "codex",
   });
+});
+
+it("绑定密钥失效时启动前提示换绑，并可直接换绑", async () => {
+  snapshot.currentOfficial = official.id;
+  snapshot.connections.push(official);
+  snapshot.bindings.codex = {
+    agentId: "codex",
+    connectionId: official.id,
+    model: "server-model",
+    tokenId: 7,
+    status: "ready",
+    verified: true,
+  };
+  const base = native.invoke.getMockImplementation();
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === "check_tool_connection")
+      return {
+        agentId: args.agentId,
+        ok: false,
+        reason: "key",
+        needsRebind: true,
+        message: "绑定的密钥已在站点失效或被停用，请换绑其他可用密钥",
+      };
+    return base!(command, args);
+  });
+  render(
+    <AppProvider>
+      <LogoutHarness />
+    </AppProvider>,
+  );
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "启动 Codex" }));
+  expect(
+    await screen.findByRole("heading", { name: "Codex 的密钥已失效" }),
+  ).toBeInTheDocument();
+  const dialog = await screen.findByRole("dialog");
+  await user.click(within(dialog).getByRole("button", { name: "换绑密钥" }));
+  expect(await screen.findByText("换绑 Codex 的密钥")).toBeInTheDocument();
 });
 
 it("设置可保存本地授权地址，登录显示新地址且保留已有工具", async () => {

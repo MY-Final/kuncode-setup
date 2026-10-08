@@ -141,6 +141,20 @@ export interface ConfigurationOutcome {
   binding: ToolBinding;
   steps: ConnectionStep[];
 }
+/** 与 Rust 端 BindingCheck 对应：启动前一致性校验结果 */
+export interface BindingCheck {
+  agentId: string;
+  ok: boolean;
+  reason: "ok" | "config" | "key" | "network";
+  needsRebind: boolean;
+  message: string;
+}
+/** 与 Rust 端 RestoreOutcome 对应：从备份恢复配置的结果 */
+export interface RestoreOutcome {
+  agentId: string;
+  restored: string[];
+  missing: string[];
+}
 export interface AccountProfile {
   connectionId: string;
   /** 站点类型；newapi 为当前实现，sub2api 等可复用同一契约 */

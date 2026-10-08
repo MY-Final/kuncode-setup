@@ -12,6 +12,8 @@ import type {
   ConnectionStep,
   ImportConnection,
   ConfigurationOutcome,
+  BindingCheck,
+  RestoreOutcome,
   AccountProfile,
   SiteToken,
   SiteGroup,
@@ -223,6 +225,25 @@ export async function applyConnection(
     },
     progress,
   });
+}
+export async function checkToolConnection(
+  agentId: string,
+): Promise<BindingCheck> {
+  if (!isTauri())
+    return {
+      agentId,
+      ok: true,
+      reason: "ok",
+      needsRebind: false,
+      message: "演示环境，未做真实校验",
+    };
+  return invoke("check_tool_connection", { agentId });
+}
+export async function restoreToolConfig(
+  agentId: string,
+): Promise<RestoreOutcome> {
+  requireDesktop();
+  return invoke("restore_tool_config", { agentId });
 }
 export async function probeToolConnection(
   agentId: string,

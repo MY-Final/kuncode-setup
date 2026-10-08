@@ -14,6 +14,10 @@ export interface OperationStep {
   label: string;
   status: "waiting" | "running" | "complete" | "error" | "warning";
 }
+export interface OperationAction {
+  label: string;
+  onClick: () => void;
+}
 export interface OperationState {
   agentId?: string;
   title: string;
@@ -22,17 +26,22 @@ export interface OperationState {
   steps: OperationStep[];
   progress?: number;
   error?: string;
+  /** 本机配置损坏，建议重新配置。 */
   needsRepair?: boolean;
+  /** 绑定密钥失效，建议直接换绑其他密钥。 */
+  needsRebind?: boolean;
+  /** 可以从备份恢复原配置。 */
+  canRestore?: boolean;
 }
 
 export function OperationDialog({
   operation,
   onClose,
-  action,
+  actions,
 }: {
   operation: OperationState | null;
   onClose: () => void;
-  action?: { label: string; onClick: () => void };
+  actions?: OperationAction[];
 }) {
   const running = operation?.phase === "running";
   const previousFocus = useRef<HTMLElement | null>(null);
@@ -118,14 +127,20 @@ export function OperationDialog({
           ) : (
             <>
               <Button
-                variant={action ? "outline" : "default"}
+                variant={actions?.length ? "outline" : "default"}
                 onClick={onClose}
               >
                 {operation?.phase === "error" ? "返回" : "完成"}
               </Button>
-              {action && (
-                <Button onClick={action.onClick}>{action.label}</Button>
-              )}
+              {actions?.map((action, index) => (
+                <Button
+                  key={action.label}
+                  variant={index === actions.length - 1 ? "default" : "outline"}
+                  onClick={action.onClick}
+                >
+                  {action.label}
+                </Button>
+              ))}
             </>
           )}
         </div>

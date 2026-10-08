@@ -27,7 +27,7 @@ export function useAgentLaunch() {
         label: agent.name,
         status: agent.installed || configured.demo ? "complete" : "error",
       },
-      { label: "检查服务连接", status: "running" },
+      { label: "检查配置与密钥", status: "running" },
       { label: `启动 ${agent.name}`, status: "waiting" },
     ];
     const state: OperationState = {
@@ -35,7 +35,7 @@ export function useAgentLaunch() {
       title: `正在启动 ${agent.name}`,
       description: configured.demo
         ? "演示启动，不会打开本机工具。"
-        : "检查已配置的工具连接，然后打开工具。",
+        : "校验本机配置与站点密钥，然后打开工具。",
       phase: "running",
       steps,
       progress: 50,
@@ -51,7 +51,7 @@ export function useAgentLaunch() {
     try {
       if (!agent.installed && !configured.demo)
         throw new Error(`未检测到 ${agent.name}，请到系统诊断检查安装状态。`);
-      if (configured.demo)
+      if (configured.demo) {
         await api.testConnection(
           {
             agentId: agent.id,
@@ -61,20 +61,32 @@ export function useAgentLaunch() {
           },
           true,
         );
-      else {
-        try {
-          const result = await api.probeToolConnection(agent.id);
-          if (!result.ok) throw new Error(result.message);
-        } catch (value) {
-          const kind =
-            typeof value === "object" && value !== null && "kind" in value
-              ? value.kind
-              : "error";
-          if (kind === "auth" || kind === "parse") {
+      } else {
+        // 启动前一致性校验：本机配置 + 站点密钥。
+        const check = await api.checkToolConnection(agent.id);
+        if (!check.ok) {
+          if (check.reason === "network") {
+            // 网络不可用不阻断启动：配置本身没有问题。
+            warning = `${check.message}。继续打开已配置的工具。`;
+          } else {
             await refreshConnections();
-            throw value;
+            steps[3].status = "error";
+            steps[4].status = "waiting";
+            show({
+              title: check.needsRebind
+                ? `${agent.name} 的密钥已失效`
+                : `${agent.name} 配置需要修复`,
+              description: check.needsRebind
+                ? "换绑其他可用密钥后即可继续使用，无需重走整条向导。"
+                : "本机配置已被修改或损坏，可恢复备份或重新配置。",
+              phase: "error",
+              error: check.message,
+              needsRebind: check.needsRebind,
+              needsRepair: !check.needsRebind,
+              canRestore: !check.needsRebind,
+            });
+            return;
           }
-          warning = `${errorMessage(value)}。继续打开已配置的工具。`;
         }
       }
       steps[3].status = warning ? "warning" : "complete";
@@ -110,6 +122,7 @@ export function useAgentLaunch() {
         phase: "error",
         error: errorMessage(value),
         needsRepair: kind === "auth" || kind === "parse",
+        canRestore: kind === "auth" || kind === "parse",
       });
     } finally {
       locked.current = false;

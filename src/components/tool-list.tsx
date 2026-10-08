@@ -1,17 +1,74 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowRight, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { AgentIcon } from "@/components/agent-icon";
 import { Button } from "@/components/ui/button";
 import { OperationDialog } from "@/components/operation-dialog";
+import { RebindDialog } from "@/components/rebind-dialog";
 import { useApp } from "@/lib/store";
 import { useAgentLaunch } from "@/lib/use-agent-launch";
+import * as api from "@/lib/tauri/api";
 import { DEMO_MODELS } from "@/lib/data/models";
 import { AGENT_PRESENTATION } from "@/lib/data/agents";
+import { errorMessage } from "@/lib/utils";
+import type { AgentMeta } from "@/lib/types";
 
 export function ToolList({ management = false }: { management?: boolean }) {
-  const { agents, configurations, loading, error, refresh } = useApp();
+  const {
+    agents,
+    configurations,
+    loading,
+    error,
+    refresh,
+    refreshConnections,
+  } = useApp();
   const navigate = useNavigate();
   const { operation, launch, close } = useAgentLaunch();
+  const [rebind, setRebind] = useState<AgentMeta | null>(null);
+
+  async function restore(agentId: string) {
+    close();
+    try {
+      const outcome = await api.restoreToolConfig(agentId);
+      await refreshConnections();
+      await refresh();
+      toast.success(`已从备份恢复 ${outcome.restored.length} 个配置文件`);
+    } catch (value) {
+      toast.error(errorMessage(value));
+    }
+  }
+
+  const errorActions = (() => {
+    if (operation?.phase !== "error") return undefined;
+    const id = operation.agentId;
+    if (!id) return undefined;
+    const actions = [] as { label: string; onClick: () => void }[];
+    if (operation.needsRebind) {
+      const agent = agents.find((item) => item.id === id);
+      actions.push({
+        label: "换绑密钥",
+        onClick: () => {
+          close();
+          if (agent) setRebind(agent);
+        },
+      });
+    } else if (operation.canRestore) {
+      actions.push({
+        label: "恢复备份",
+        onClick: () => void restore(id),
+      });
+    }
+    actions.push({
+      label: operation.needsRebind ? "重新配置" : "修复配置",
+      onClick: () => {
+        close();
+        navigate(`/setup/${id}`);
+      },
+    });
+    return actions;
+  })();
+
   return (
     <>
       {error && (
@@ -71,6 +128,24 @@ export function ToolList({ management = false }: { management?: boolean }) {
                     重新配置
                   </Button>
                 )}
+                {ready && !config.demo && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setRebind(agent)}
+                  >
+                    换绑密钥
+                  </Button>
+                )}
+                {management && ready && !config.demo && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void restore(agent.id)}
+                  >
+                    恢复备份
+                  </Button>
+                )}
                 <Button
                   className="tool-primary"
                   onClick={() =>
@@ -99,21 +174,14 @@ export function ToolList({ management = false }: { management?: boolean }) {
       <OperationDialog
         operation={operation}
         onClose={close}
-        action={
-          operation?.phase === "error"
-            ? {
-                label: operation.needsRepair ? "修复配置" : "系统诊断",
-                onClick: () => {
-                  const id = operation.agentId;
-                  close();
-                  if (id)
-                    navigate(
-                      operation.needsRepair ? `/setup/${id}` : "/diagnose",
-                    );
-                },
-              }
-            : undefined
-        }
+        actions={errorActions}
+      />
+      <RebindDialog
+        agent={rebind}
+        onOpenChange={(open) => {
+          if (!open) setRebind(null);
+        }}
+        onDone={() => toast.success("密钥已换绑，配置已更新")}
       />
     </>
   );
