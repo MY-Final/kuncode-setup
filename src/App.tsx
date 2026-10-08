@@ -10,6 +10,7 @@ const SetupPage = lazy(() => import("@/pages/setup"));
 const ModelsPage = lazy(() => import("@/pages/models"));
 const DiagnosePage = lazy(() => import("@/pages/diagnose"));
 const SettingsPage = lazy(() => import("@/pages/settings"));
+const KeysPage = lazy(() => import("@/pages/keys"));
 
 function Application() {
   const { resolvedTheme } = usePreferences();
@@ -32,6 +33,7 @@ function Application() {
                 element={<SetupPage key={location.pathname} />}
               />
               <Route path="/models" element={<ModelsPage />} />
+              <Route path="/keys" element={<KeysPage />} />
               <Route path="/diagnose" element={<DiagnosePage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />

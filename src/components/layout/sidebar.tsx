@@ -1,6 +1,7 @@
 import { NavLink, useLocation } from "react-router-dom";
 import {
   House,
+  KeyRound,
   Wrench,
   Activity,
   Settings,
@@ -12,6 +13,7 @@ import { usePreferences } from "@/lib/preferences";
 const nav = [
   { to: "/", label: "首页", icon: House },
   { to: "/models", label: "工具配置", icon: Wrench },
+  { to: "/keys", label: "密钥与分组", icon: KeyRound },
   { to: "/diagnose", label: "系统诊断", icon: Activity },
   { to: "/settings", label: "设置", icon: Settings },
 ];
