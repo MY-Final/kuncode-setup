@@ -554,6 +554,109 @@
   height: 31px;
   font-size: 11px;
 }
+.dashboard {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  margin-bottom: 42px;
+}
+.dashboard-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+.dashboard-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.dashboard-card-head > svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.6;
+}
+.dashboard-card-head > span {
+  flex: 1;
+}
+.dashboard-card-head [data-slot="button"] {
+  height: 24px;
+  padding: 0 6px;
+  font-size: 11px;
+  gap: 5px;
+}
+.dashboard-card-head [data-slot="button"] svg {
+  width: 13px;
+  height: 13px;
+}
+.dashboard-value {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+}
+.dashboard-sub {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  line-height: 1.6;
+}
+.dashboard-muted {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  line-height: 1.6;
+}
+.dashboard-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--warning);
+}
+.dashboard-alert.error {
+  color: var(--destructive);
+}
+.dashboard-alert svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.inline-notice {
+  margin: 0 0 16px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.install-commands {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.install-commands code {
+  display: block;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.diagnostic-guide-action[data-slot="button"] {
+  height: 25px;
+  font-size: 10px;
+  padding: 0 8px;
+}
 .home-heading {
   margin-bottom: 42px;
 }
