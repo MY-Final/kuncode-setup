@@ -11,10 +11,27 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useApp } from "@/lib/store";
 import * as api from "@/lib/tauri/api";
 import type { SiteGroup, SiteToken } from "@/lib/types";
 import { errorMessage } from "@/lib/utils";
+import {
+  cacheSiteTokens,
+  formatCacheAge,
+  readCachedGroupModels,
+  readCachedSiteTokens,
+  cacheGroupModels,
+} from "@/lib/cache";
 
 const AGENT_LABELS: Record<string, string> = {
   codex: "Codex",
@@ -36,6 +53,8 @@ export default function KeysPage() {
   const [groupModels, setGroupModels] = useState<string[]>([]);
   const [limits, setLimits] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<SiteToken | null>(null);
+  const [offlineAt, setOfflineAt] = useState<number | null>(null);
 
   const usableConnections = connections.filter((item) => item.connected);
   const usableIds = usableConnections.map((item) => item.id).join(",");
@@ -55,9 +74,19 @@ export default function KeysPage() {
       ]);
       setTokens(tokenValues);
       setGroups(groupValues);
+      setOfflineAt(null);
+      cacheSiteTokens(id, tokenValues);
     } catch (value) {
-      setError(errorMessage(value));
-      setTokens([]);
+      // 网络不可用时降级展示上次缓存的密钥列表。
+      const cached = readCachedSiteTokens(id);
+      if (cached) {
+        setTokens(cached.tokens);
+        setOfflineAt(cached.at);
+        setError(null);
+      } else {
+        setError(errorMessage(value));
+        setTokens([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -83,10 +112,14 @@ export default function KeysPage() {
     api
       .groupModels(connectionId, group)
       .then((values) => {
-        if (active) setGroupModels(values);
+        if (!active) return;
+        setGroupModels(values);
+        if (values.length) cacheGroupModels(connectionId, group, values);
       })
       .catch(() => {
-        if (active) setGroupModels([]);
+        if (!active) return;
+        // 离线时回退到缓存的分组模型。
+        setGroupModels(readCachedGroupModels(connectionId, group) ?? []);
       });
     return () => {
       active = false;
@@ -131,8 +164,10 @@ export default function KeysPage() {
       setSaving(false);
     }
   }
-  async function remove(token: SiteToken) {
-    if (!connectionId) return;
+  async function confirmDelete() {
+    const token = pendingDelete;
+    if (!connectionId || !token) return;
+    setPendingDelete(null);
     setError(null);
     try {
       await api.deleteSiteToken(connectionId, token.id);
@@ -187,6 +222,11 @@ export default function KeysPage() {
           当前为演示结果，Windows 应用会读取真实站点密钥。
         </p>
       )}
+      {offlineAt !== null && (
+        <p className="inline-notice" role="status">
+          网络不可用，正在显示 {formatCacheAge(offlineAt)} 的缓存密钥列表。
+        </p>
+      )}
       {error && (
         <p className="inline-error" role="alert">
           {error}
@@ -238,7 +278,7 @@ export default function KeysPage() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => void remove(token)}
+                  onClick={() => setPendingDelete(token)}
                   disabled={token.boundAgents.length > 0}
                   title={
                     token.boundAgents.length > 0
@@ -347,6 +387,34 @@ export default function KeysPage() {
           </div>
         </DialogContent>
       </Dialog>
+      <AlertDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              删除密钥「{pendingDelete?.name}」？
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDelete && pendingDelete.boundAgents.length > 0
+                ? `该密钥正被 ${pendingDelete.boundAgents.length} 个工具引用，需要先解绑再删除。`
+                : "删除后无法恢复，使用该密钥的工具将无法连接。"}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => void confirmDelete()}
+              disabled={(pendingDelete?.boundAgents.length ?? 0) > 0}
+            >
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
