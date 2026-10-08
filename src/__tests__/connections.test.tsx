@@ -11,6 +11,7 @@ import SettingsPage from "@/pages/settings";
 import { AccountPanel } from "@/components/account-panel";
 import { AppShell } from "@/components/layout/app-shell";
 import HomePage from "@/pages/home";
+import KeysPage from "@/pages/keys";
 import { PreferencesProvider } from "@/lib/preferences";
 import type {
   ConnectionSnapshot,
@@ -314,6 +315,92 @@ it("真实配置使用服务器模型，预览不创建密钥，确认后才写�
     "server-model",
     "second-model",
   ]);
+});
+
+it("首页 Dashboard 展示账户余额与工具状态", async () => {
+  snapshot.connections.push(official);
+  snapshot.currentOfficial = official.id;
+  snapshot.bindings.codex = {
+    agentId: "codex",
+    connectionId: official.id,
+    model: "server-model",
+    tokenId: 7,
+    status: "ready",
+    verified: true,
+  };
+  render(
+    <AppProvider>
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>
+    </AppProvider>,
+  );
+  expect(await screen.findByText("账户余额")).toBeInTheDocument();
+  expect(await screen.findByText("$12.50")).toBeInTheDocument();
+  expect(screen.getByText("工具状态")).toBeInTheDocument();
+  expect(screen.getByText("1 / 3")).toBeInTheDocument();
+});
+
+it("首页对低额度账户给出预警", async () => {
+  snapshot.connections.push(official);
+  snapshot.currentOfficial = official.id;
+  const base = native.invoke.getMockImplementation();
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === "connection_profile")
+      return {
+        connectionId: args.connectionId,
+        provider: "newapi",
+        kind: "kuncode_authorized",
+        siteUrl: official.siteUrl,
+        authenticated: true,
+        account: "owner",
+        username: "owner",
+        displayName: "Owner",
+        userId: 1,
+        email: null,
+        role: null,
+        group: "default",
+        status: "正常",
+        balance: 0.2,
+        usedQuota: 3,
+        requestCount: 1,
+        quotaDisplayType: "USD",
+        currencySymbol: "$",
+        quotaPerUnit: 500000,
+        memberSince: null,
+        expiresAt: null,
+        connected: true,
+      };
+    return base!(command, args);
+  });
+  render(
+    <AppProvider>
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>
+    </AppProvider>,
+  );
+  expect(
+    await screen.findByText("额度偏低，建议及时充值以免影响使用。"),
+  ).toBeInTheDocument();
+});
+
+it("删除被引用的密钥前提示引用数量", async () => {
+  snapshot.connections.push(official);
+  snapshot.currentOfficial = official.id;
+  render(
+    <AppProvider>
+      <MemoryRouter initialEntries={["/keys"]}>
+        <Routes>
+          <Route path="/keys" element={<KeysPage />} />
+        </Routes>
+      </MemoryRouter>
+    </AppProvider>,
+  );
+  const user = userEvent.setup();
+  const remove = await screen.findAllByText("删除");
+  await user.click(remove[remove.length - 1]);
+  expect(await screen.findByText("删除密钥「site-key」？")).toBeInTheDocument();
 });
 
 function LogoutHarness() {

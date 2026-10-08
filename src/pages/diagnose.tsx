@@ -9,11 +9,20 @@ import {
   PlugZap,
   Circle,
   AlertTriangle,
+  ExternalLink,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useApp } from "@/lib/store";
 import { isTauri, probeToolConnection, testConnection } from "@/lib/tauri/api";
+import { installGuideFor, type InstallGuide } from "@/lib/data/install";
 import type { TestResult } from "@/lib/types";
 import { cn, errorMessage } from "@/lib/utils";
 export default function DiagnosePage() {
@@ -28,6 +37,10 @@ export default function DiagnosePage() {
   } = useApp();
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<TestResult | null>(null);
+  const [guide, setGuide] = useState<{
+    name: string;
+    guide: InstallGuide;
+  } | null>(null);
   const tools = [...(environment?.tools ?? []), ...agents];
   const configured = Object.keys(configurations).filter(
     (id) => !configurations[id].demo,
@@ -73,6 +86,10 @@ export default function DiagnosePage() {
     } finally {
       setTesting(false);
     }
+  }
+  function openGuide(id: string, name: string) {
+    const value = installGuideFor(id);
+    if (value) setGuide({ name, guide: value });
   }
   function icon(id: string) {
     return id === "node" || id === "npm" ? (
@@ -158,6 +175,15 @@ export default function DiagnosePage() {
             </span>
             {tool.installed ? (
               <Check className="text-success" aria-hidden="true" />
+            ) : installGuideFor(tool.id) ? (
+              <Button
+                className="diagnostic-guide-action"
+                variant="outline"
+                size="sm"
+                onClick={() => openGuide(tool.id, tool.name)}
+              >
+                查看安装方式
+              </Button>
             ) : (
               <AlertTriangle className="text-warning" aria-hidden="true" />
             )}
@@ -209,6 +235,42 @@ export default function DiagnosePage() {
       {isTauri() && !configured.length && (
         <p className="page-footnote">请先完成工具配置，再检查服务连接。</p>
       )}
+      <Dialog
+        open={guide !== null}
+        onOpenChange={(open) => {
+          if (!open) setGuide(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>安装 {guide?.name}</DialogTitle>
+            <DialogDescription>
+              安装完成后回到本页点「重新检查」即可。
+            </DialogDescription>
+          </DialogHeader>
+          {guide?.guide.note && (
+            <p className="page-footnote">{guide.guide.note}</p>
+          )}
+          {guide?.guide.commands.length ? (
+            <div className="install-commands">
+              {guide.guide.commands.map((command) => (
+                <code key={command}>{command}</code>
+              ))}
+            </div>
+          ) : null}
+          <div className="setup-form-footer">
+            <Button variant="outline" onClick={() => setGuide(null)}>
+              关闭
+            </Button>
+            <Button asChild>
+              <a href={guide?.guide.docs} target="_blank" rel="noreferrer">
+                打开官方文档
+                <ExternalLink aria-hidden="true" />
+              </a>
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
