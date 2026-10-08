@@ -97,6 +97,27 @@ beforeEach(() => {
       return other;
     }
     if (command === "connection_models") return ["server-model"];
+    if (command === "list_site_tokens")
+      return [
+        {
+          id: 7,
+          name: "site-key",
+          maskedKey: "sk-abcd********wxyz",
+          group: "default",
+          status: 1,
+          unlimitedQuota: true,
+          remainQuota: 0,
+          usedQuota: 0,
+          expiredTime: -1,
+          accessedTime: 0,
+          modelLimitsEnabled: false,
+          modelLimits: [],
+          boundAgents: [],
+        },
+      ];
+    if (command === "site_groups")
+      return [{ name: "default", description: "默认", ratio: 1 }];
+    if (command === "group_models") return ["server-model"];
     if (command === "preview_connection_config")
       return {
         agentId: args.agentId,
@@ -258,6 +279,8 @@ it("真实配置使用服务器模型，预览不创建密钥，确认后才写�
   const user = userEvent.setup();
   await user.click(await screen.findByRole("radio", { name: /other.example/ }));
   await user.click(screen.getByRole("button", { name: "使用此连接" }));
+  await user.click(await screen.findByRole("radio", { name: /site-key/ }));
+  await user.click(screen.getByRole("button", { name: "使用此密钥" }));
   await user.click(await screen.findByRole("button", { name: "下一步" }));
   expect(await screen.findByText("确认配置")).toBeInTheDocument();
   expect(
