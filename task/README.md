@@ -28,3 +28,6 @@ CC Switch 但为本站定制，面向小白用户。
 
 Phase 0 已完成，见 `achieved/phase-0-desktop-keys-api.md`。
 Phase 1 已完成，见 `achieved/phase-1-key-center-mvp.md`。
+Phase 2 已完成，见 `achieved/phase-2-multi-model-and-groups.md`。
+Phase 3 已完成，见 `achieved/phase-3-switch-and-consistency.md`。
+Phase 4 已完成，见 `achieved/phase-4-polish.md`。
