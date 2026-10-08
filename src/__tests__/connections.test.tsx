@@ -117,7 +117,7 @@ beforeEach(() => {
       ];
     if (command === "site_groups")
       return [{ name: "default", description: "默认", ratio: 1 }];
-    if (command === "group_models") return ["server-model"];
+    if (command === "group_models") return ["server-model", "second-model"];
     if (command === "preview_connection_config")
       return {
         agentId: args.agentId,
@@ -135,7 +135,8 @@ beforeEach(() => {
       const binding = {
         agentId: args.agentId,
         connectionId: args.connectionId,
-        model: args.model,
+        model: args.selection.model,
+        models: args.selection.models,
         tokenId: 7,
         status: "ready" as const,
         verified: true,
@@ -281,6 +282,10 @@ it("真实配置使用服务器模型，预览不创建密钥，确认后才写�
   await user.click(screen.getByRole("button", { name: "使用此连接" }));
   await user.click(await screen.findByRole("radio", { name: /site-key/ }));
   await user.click(screen.getByRole("button", { name: "使用此密钥" }));
+  // 多选：默认勾选第一个模型，再手动勾选第二个。
+  await user.click(
+    await screen.findByRole("checkbox", { name: "second-model" }),
+  );
   await user.click(await screen.findByRole("button", { name: "下一步" }));
   expect(await screen.findByText("确认配置")).toBeInTheDocument();
   expect(
@@ -295,6 +300,10 @@ it("真实配置使用服务器模型，预览不创建密钥，确认后才写�
   ).toBeInTheDocument();
   expect(snapshot.bindings.codex.connectionId).toBe(other.id);
   expect(snapshot.bindings.codex.model).toBe("server-model");
+  expect(snapshot.bindings.codex.models).toEqual([
+    "server-model",
+    "second-model",
+  ]);
 });
 
 function LogoutHarness() {

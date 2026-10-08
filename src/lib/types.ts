@@ -83,6 +83,7 @@ export interface ToolBinding {
   agentId: string;
   connectionId: string;
   model: string;
+  models?: string[];
   group?: string | null;
   tokenId: number | null;
   status: "ready" | "error";

@@ -54,6 +54,7 @@ export default function SetupPage() {
   const [demo, setDemo] = useState(false);
   const [model, setModel] = useState(config?.model ?? "");
   const [models, setModels] = useState<string[]>([]);
+  const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [tokens, setTokens] = useState<SiteToken[]>([]);
   const [groups, setGroups] = useState<SiteGroup[]>([]);
   const [tokenId, setTokenId] = useState<number | null>(
@@ -96,6 +97,11 @@ export default function SetupPage() {
         setModel((previous) =>
           values.includes(previous) ? previous : (values[0] ?? ""),
         );
+        setSelectedModels((previous) => {
+          const kept = previous.filter((item) => values.includes(item));
+          if (kept.length) return kept;
+          return values.length ? [values[0]] : [];
+        });
         if (!values.length)
           setModelNotice("此连接没有可用模型，请检查站点权限。");
       })
@@ -178,7 +184,12 @@ export default function SetupPage() {
             },
             true,
           )
-        : await api.previewConnection(connectionId, agentId, model.trim());
+        : await api.previewConnection(
+            connectionId,
+            agentId,
+            model.trim(),
+            effectiveModels,
+          );
       setPreview(result);
       setDraft({ agentId, model: model.trim(), connectionId, demo });
       setStage("preview");
@@ -241,6 +252,7 @@ export default function SetupPage() {
           },
           tokenId ?? undefined,
           group || undefined,
+          effectiveModels,
         );
         await refreshConnections();
         const success = outcome.binding.status === "ready";
@@ -284,6 +296,11 @@ export default function SetupPage() {
         description: item.description,
       }))
     : models.map((id) => ({ id, name: id, description: "站点提供的模型" }));
+  // 手填模型 ID 时没有可勾选列表，直接把当前输入作为默认模型。
+  const effectiveModels =
+    manualModel && model.trim()
+      ? [model.trim(), ...selectedModels.filter((id) => id !== model.trim())]
+      : selectedModels;
   return (
     <>
       <button
@@ -411,6 +428,7 @@ export default function SetupPage() {
               onClick={() => {
                 setDemo(true);
                 setModel(DEMO_MODELS[0].id);
+                setSelectedModels([DEMO_MODELS[0].id]);
                 setError(null);
                 setStage("model");
               }}
@@ -494,9 +512,7 @@ export default function SetupPage() {
                     </option>
                   ))}
                 </select>
-                <p className="page-footnote">
-                  分组决定费率、可用模型与限速。
-                </p>
+                <p className="page-footnote">分组决定费率、可用模型与限速。</p>
               </div>
             )}
             {keyNotice && (
@@ -505,10 +521,7 @@ export default function SetupPage() {
               </p>
             )}
             <div className="connection-entry">
-              <Button
-                variant="outline"
-                onClick={() => navigate("/keys")}
-              >
+              <Button variant="outline" onClick={() => navigate("/keys")}>
                 管理密钥
               </Button>
               <Button
@@ -532,26 +545,53 @@ export default function SetupPage() {
                 正在获取站点模型…
               </p>
             )}
-            <RadioGroup
-              value={model}
-              onValueChange={setModel}
-              className="setup-models"
-              aria-label="选择模型"
-            >
-              {options.map((item, index) => (
-                <label
-                  key={item.id}
-                  htmlFor={`model-${index}`}
-                  className={cn("model-row", model === item.id && "selected")}
-                >
-                  <RadioGroupItem id={`model-${index}`} value={item.id} />
-                  <span className="model-copy">
-                    <strong>{item.name}</strong>
-                    <span>{item.description}</span>
-                  </span>
-                </label>
-              ))}
-            </RadioGroup>
+            <p className="page-footnote">
+              第一个勾选的模型会作为默认模型；可多选，写入客户端支持的模型列表。
+            </p>
+            <div className="setup-models" role="group" aria-label="选择模型">
+              {options.map((item) => {
+                const checked = selectedModels.includes(item.id);
+                const isDefault = model === item.id;
+                return (
+                  <label
+                    key={item.id}
+                    className={cn("model-row", checked && "selected")}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        setSelectedModels((previous) => {
+                          const next = checked
+                            ? previous.filter((id) => id !== item.id)
+                            : [...previous, item.id];
+                          if (!next.includes(model)) setModel(next[0] ?? "");
+                          return next;
+                        });
+                      }}
+                      aria-label={item.name}
+                    />
+                    <span className="model-copy">
+                      <strong>
+                        {item.name}
+                        {isDefault && " · 默认"}
+                      </strong>
+                      <span>{item.description}</span>
+                    </span>
+                    {checked && !isDefault && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setModel(item.id)}
+                      >
+                        设为默认
+                      </Button>
+                    )}
+                  </label>
+                );
+              })}
+            </div>
             {manualModel && (
               <div className="form-field">
                 <Label htmlFor="manual-model">模型 ID</Label>
@@ -590,7 +630,8 @@ export default function SetupPage() {
                   busy ||
                   modelLoading ||
                   !model.trim() ||
-                  (!demo && !manualModel && !models.includes(model))
+                  (!demo && !manualModel && !models.includes(model)) ||
+                  (!demo && effectiveModels.length === 0)
                 }
               >
                 {busy && <Loader2 className="animate-spin" />}下一步
@@ -645,7 +686,3 @@ export default function SetupPage() {
     </>
   );
 }
-
-
-
-

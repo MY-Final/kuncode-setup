@@ -190,9 +190,15 @@ export async function previewConnection(
   connectionId: string,
   agentId: string,
   model: string,
+  models: string[] = [],
 ): Promise<ConfigPreview> {
   requireDesktop();
-  return invoke("preview_connection_config", { connectionId, agentId, model });
+  return invoke("preview_connection_config", {
+    connectionId,
+    agentId,
+    model,
+    models,
+  });
 }
 export async function applyConnection(
   connectionId: string,
@@ -201,6 +207,7 @@ export async function applyConnection(
   onStep: (step: ConnectionStep) => void,
   tokenId?: number,
   group?: string,
+  models: string[] = [],
 ): Promise<ConfigurationOutcome> {
   requireDesktop();
   const progress = new Channel<ConnectionStep>();
@@ -208,9 +215,12 @@ export async function applyConnection(
   return invoke("apply_connection_config", {
     connectionId,
     agentId,
-    model,
-    tokenId: tokenId ?? null,
-    group: group ?? null,
+    selection: {
+      model,
+      models,
+      tokenId: tokenId ?? null,
+      group: group ?? null,
+    },
     progress,
   });
 }
