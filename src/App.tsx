@@ -11,6 +11,7 @@ const ModelsPage = lazy(() => import("@/pages/models"));
 const DiagnosePage = lazy(() => import("@/pages/diagnose"));
 const SettingsPage = lazy(() => import("@/pages/settings"));
 const KeysPage = lazy(() => import("@/pages/keys"));
+const ToolDetailPage = lazy(() => import("@/pages/tool-detail"));
 
 function Application() {
   const { resolvedTheme } = usePreferences();
@@ -33,6 +34,7 @@ function Application() {
                 element={<SetupPage key={location.pathname} />}
               />
               <Route path="/models" element={<ModelsPage />} />
+              <Route path="/tools/:agent" element={<ToolDetailPage />} />
               <Route path="/keys" element={<KeysPage />} />
               <Route path="/diagnose" element={<DiagnosePage />} />
               <Route path="/settings" element={<SettingsPage />} />

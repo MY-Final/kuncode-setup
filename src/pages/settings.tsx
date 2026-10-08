@@ -1,4 +1,4 @@
-import { Moon, Sun, Monitor } from "lucide-react";
+import { Moon, Sun, Monitor, Pencil, Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,8 +16,17 @@ import { useApp } from "@/lib/store";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ConnectionDialog } from "@/components/connection-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { errorMessage } from "@/lib/utils";
 import { DEFAULT_AUTHORIZATION_SITE, isTauri } from "@/lib/tauri/api";
+import * as api from "@/lib/tauri/api";
+import type { ConnectionSummary } from "@/lib/types";
 export default function SettingsPage() {
   const { preferences, updatePreferences } = usePreferences();
   const {
@@ -26,11 +35,18 @@ export default function SettingsPage() {
     logout,
     authorizationSite,
     updateAuthorizationSite,
+    refreshConnections,
   } = useApp();
   const [connect, setConnect] = useState(false);
   const [signingOut, setSigningOut] = useState<string | null>(null);
   const [site, setSite] = useState(authorizationSite);
   const [savingSite, setSavingSite] = useState(false);
+  const [editing, setEditing] = useState<ConnectionSummary | null>(null);
+  const [alias, setAlias] = useState("");
+  const [note, setNote] = useState("");
+  const [savingMeta, setSavingMeta] = useState(false);
+  const [pings, setPings] = useState<Record<string, number | null>>({});
+  const [pinging, setPinging] = useState<string | null>(null);
   useEffect(() => setSite(authorizationSite), [authorizationSite]);
   async function saveSite(value: string) {
     if (savingSite) return;
@@ -42,6 +58,41 @@ export default function SettingsPage() {
       toast.error(errorMessage(value));
     } finally {
       setSavingSite(false);
+    }
+  }
+  function openRename(connection: ConnectionSummary) {
+    setEditing(connection);
+    setAlias(connection.alias ?? "");
+    setNote(connection.note ?? "");
+  }
+  async function saveMeta() {
+    if (!editing || savingMeta) return;
+    setSavingMeta(true);
+    try {
+      await api.renameConnection(
+        editing.id,
+        alias.trim() || null,
+        note.trim() || null,
+      );
+      await refreshConnections();
+      toast.success("连接信息已保存");
+      setEditing(null);
+    } catch (value) {
+      toast.error(errorMessage(value));
+    } finally {
+      setSavingMeta(false);
+    }
+  }
+  async function ping(id: string) {
+    if (pinging) return;
+    setPinging(id);
+    try {
+      const value = await api.pingConnection(id);
+      setPings((previous) => ({ ...previous, [id]: value }));
+    } catch (value) {
+      toast.error(errorMessage(value));
+    } finally {
+      setPinging(null);
     }
   }
   async function disconnect(id: string) {
@@ -147,7 +198,9 @@ export default function SettingsPage() {
             <div className="setting-row" key={connection.id}>
               <div>
                 <h3>
-                  {connection.account ?? new URL(connection.siteUrl).host}
+                  {connection.alias ??
+                    connection.account ??
+                    new URL(connection.siteUrl).host}
                 </h3>
                 <p>
                   {connection.kind === "api_key"
@@ -156,16 +209,43 @@ export default function SettingsPage() {
                       ? "KunCode 浏览器授权"
                       : "用户 Token 连接"}{" "}
                   · {connection.siteUrl}
+                  {connection.note ? ` · ${connection.note}` : ""}
                 </p>
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={!!signingOut}
-                onClick={() => void disconnect(connection.id)}
-              >
-                断开连接
-              </Button>
+              <div className="setting-actions">
+                {pings[connection.id] != null && (
+                  <span className="latency-badge">
+                    {pings[connection.id]} ms
+                  </span>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void ping(connection.id)}
+                  disabled={pinging === connection.id}
+                >
+                  {pinging === connection.id && (
+                    <Loader2 className="animate-spin" />
+                  )}
+                  测速
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => openRename(connection)}
+                >
+                  <Pencil aria-hidden="true" />
+                  编辑名称
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={!!signingOut}
+                  onClick={() => void disconnect(connection.id)}
+                >
+                  断开连接
+                </Button>
+              </div>
             </div>
           ))}
         <Button variant="ghost" size="sm" onClick={() => setConnect(true)}>
@@ -220,6 +300,53 @@ export default function SettingsPage() {
         </details>
       </section>
       <ConnectionDialog open={connect} onOpenChange={setConnect} />
+      <Dialog
+        open={editing !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditing(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>编辑连接信息</DialogTitle>
+            <DialogDescription>
+              别名与备注只影响本机展示，不会改变站点或密钥。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="form-field">
+            <Label htmlFor="connection-alias">别名</Label>
+            <Input
+              id="connection-alias"
+              value={alias}
+              onChange={(event) => setAlias(event.target.value)}
+              maxLength={50}
+              placeholder="例如：公司专用账号"
+            />
+          </div>
+          <div className="form-field">
+            <Label htmlFor="connection-note">备注</Label>
+            <Input
+              id="connection-note"
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              maxLength={200}
+              placeholder="可选"
+            />
+          </div>
+          <div className="setup-form-footer">
+            <Button
+              variant="outline"
+              onClick={() => setEditing(null)}
+              disabled={savingMeta}
+            >
+              取消
+            </Button>
+            <Button onClick={() => void saveMeta()} disabled={savingMeta}>
+              {savingMeta && <Loader2 className="animate-spin" />}保存
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <section className="settings-section" aria-labelledby="app-heading">
         <h2 id="app-heading">应用信息</h2>
         <div className="setting-row">

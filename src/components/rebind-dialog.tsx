@@ -38,6 +38,7 @@ export function RebindDialog({
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [pinging, setPinging] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // 打开某个工具时初始化默认选择；切换工具才重置，store 刷新不清空。
@@ -116,6 +117,32 @@ export function RebindDialog({
     };
   }, [agent?.id, connectionId, group]);
 
+  /** 对所有已连接站点测速，自动选择延迟最低的一个。 */
+  async function pickFastest() {
+    if (pinging) return;
+    setPinging(true);
+    try {
+      const online = connections.filter((item) => item.connected);
+      const results = await Promise.all(
+        online.map(async (item) => ({
+          id: item.id,
+          ms: await api.pingConnection(item.id).catch(() => null),
+        })),
+      );
+      const reachable = results.filter(
+        (item): item is { id: string; ms: number } => item.ms != null,
+      );
+      if (!reachable.length) {
+        setError("没有可访问的连接");
+        return;
+      }
+      reachable.sort((a, b) => a.ms - b.ms);
+      setConnectionId(reachable[0].id);
+    } finally {
+      setPinging(false);
+    }
+  }
+
   const defaultModel = selectedModels[0] ?? "";
 
   function toggle(model: string) {
@@ -178,10 +205,20 @@ export function RebindDialog({
                 .filter((item) => item.connected)
                 .map((item) => (
                   <option key={item.id} value={item.id}>
-                    {item.account ?? new URL(item.siteUrl).host}
+                    {item.alias ?? item.account ?? new URL(item.siteUrl).host}
                   </option>
                 ))}
             </select>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => void pickFastest()}
+              disabled={pinging}
+            >
+              {pinging && <Loader2 className="animate-spin" />}
+              自动选择最快连接
+            </Button>
           </div>
         )}
         <div className="form-field">

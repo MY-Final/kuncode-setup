@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { KeyRound, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Copy, KeyRound, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +25,7 @@ import { useApp } from "@/lib/store";
 import * as api from "@/lib/tauri/api";
 import type { SiteGroup, SiteToken } from "@/lib/types";
 import { errorMessage } from "@/lib/utils";
+import { toast } from "sonner";
 import {
   cacheSiteTokens,
   formatCacheAge,
@@ -55,6 +56,7 @@ export default function KeysPage() {
   const [saving, setSaving] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<SiteToken | null>(null);
   const [offlineAt, setOfflineAt] = useState<number | null>(null);
+  const [copying, setCopying] = useState<number | null>(null);
 
   const usableConnections = connections.filter((item) => item.connected);
   const usableIds = usableConnections.map((item) => item.id).join(",");
@@ -164,6 +166,19 @@ export default function KeysPage() {
       setSaving(false);
     }
   }
+  async function copyKey(token: SiteToken) {
+    if (!connectionId || copying !== null) return;
+    setCopying(token.id);
+    try {
+      const key = await api.revealSiteTokenKey(connectionId, token.id);
+      await navigator.clipboard.writeText(key);
+      toast.success("密钥已复制到剪贴板");
+    } catch (value) {
+      toast.error(errorMessage(value));
+    } finally {
+      setCopying(null);
+    }
+  }
   async function confirmDelete() {
     const token = pendingDelete;
     if (!connectionId || !token) return;
@@ -268,6 +283,19 @@ export default function KeysPage() {
                 </span>
               </div>
               <div className="tool-actions">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void copyKey(token)}
+                  disabled={copying === token.id}
+                >
+                  {copying === token.id ? (
+                    <Loader2 className="animate-spin" />
+                  ) : (
+                    <Copy />
+                  )}
+                  复制
+                </Button>
                 <Button
                   variant="ghost"
                   size="sm"

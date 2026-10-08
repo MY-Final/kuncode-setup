@@ -12,6 +12,7 @@ import { AccountPanel } from "@/components/account-panel";
 import { AppShell } from "@/components/layout/app-shell";
 import HomePage from "@/pages/home";
 import KeysPage from "@/pages/keys";
+import ToolDetailPage from "@/pages/tool-detail";
 import { PreferencesProvider } from "@/lib/preferences";
 import type {
   ConnectionSnapshot,
@@ -197,6 +198,39 @@ beforeEach(() => {
       };
     if (command === "restore_tool_config")
       return { agentId: args.agentId, restored: [], missing: [] };
+    if (command === "rename_connection") {
+      snapshot.connections = snapshot.connections.map((connection) =>
+        connection.id === args.connectionId
+          ? { ...connection, alias: args.alias, note: args.note }
+          : connection,
+      );
+      return snapshot.connections.find((item) => item.id === args.connectionId);
+    }
+    if (command === "tool_detail")
+      return {
+        agentId: args.agentId,
+        agentName: args.agentId === "codex" ? "Codex" : args.agentId,
+        connectionId: official.id,
+        connectionLabel: "Owner",
+        siteUrl: official.siteUrl,
+        baseUrl: official.apiBaseUrl,
+        model: "server-model",
+        models: ["server-model", "second-model"],
+        group: "default",
+        tokenId: 7,
+        status: "ready",
+        verified: true,
+        configPaths: ["test/config.toml"],
+        configFiles: [
+          {
+            path: "test/config.toml",
+            exists: true,
+            content: 'model = "server-model"\napi_key = "sk-••••••••"',
+          },
+        ],
+      };
+    if (command === "reveal_site_token_key") return "sk-revealed-key";
+    if (command === "ping_connection") return 42;
     if (command === "probe_tool_connection")
       return { ok: true, message: "已检查模型列表", latencyMs: 1 };
     if (command === "launch_agent") return "已启动";
@@ -401,6 +435,103 @@ it("删除被引用的密钥前提示引用数量", async () => {
   const remove = await screen.findAllByText("删除");
   await user.click(remove[remove.length - 1]);
   expect(await screen.findByText("删除密钥「site-key」？")).toBeInTheDocument();
+});
+
+it("工具详情页展示绑定密钥与脱敏配置", async () => {
+  snapshot.connections.push(official);
+  snapshot.currentOfficial = official.id;
+  snapshot.bindings.codex = {
+    agentId: "codex",
+    connectionId: official.id,
+    model: "server-model",
+    tokenId: 7,
+    status: "ready",
+    verified: true,
+  };
+  render(
+    <AppProvider>
+      <MemoryRouter initialEntries={["/tools/codex"]}>
+        <Routes>
+          <Route path="/tools/:agent" element={<ToolDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    </AppProvider>,
+  );
+  expect(
+    await screen.findByRole("heading", { name: "Codex 配置详情" }),
+  ).toBeInTheDocument();
+  expect(
+    await screen.findByText("server-model、second-model"),
+  ).toBeInTheDocument();
+  expect(screen.getByText("程序写入的配置")).toBeInTheDocument();
+  expect(native.invoke).toHaveBeenCalledWith("tool_detail", {
+    agentId: "codex",
+  });
+});
+
+it("密钥中心可一键复制密钥", async () => {
+  snapshot.connections.push(official);
+  snapshot.currentOfficial = official.id;
+  render(
+    <AppProvider>
+      <MemoryRouter initialEntries={["/keys"]}>
+        <Routes>
+          <Route path="/keys" element={<KeysPage />} />
+        </Routes>
+      </MemoryRouter>
+    </AppProvider>,
+  );
+  const user = userEvent.setup({ writeToClipboard: true });
+  const writeText = vi
+    .spyOn(navigator.clipboard, "writeText")
+    .mockResolvedValue(undefined);
+  const copy = await screen.findByRole("button", { name: "复制" });
+  await user.click(copy);
+  await waitFor(() =>
+    expect(writeText).toHaveBeenCalledWith("sk-revealed-key"),
+  );
+  expect(native.invoke).toHaveBeenCalledWith("reveal_site_token_key", {
+    connectionId: official.id,
+    tokenId: 7,
+  });
+});
+
+it("设置页可编辑连接别名与备注", async () => {
+  vi.stubGlobal("matchMedia", () => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  snapshot.connections.push(official, other);
+  snapshot.currentOfficial = official.id;
+  snapshot.bindings.codex = {
+    agentId: "codex",
+    connectionId: official.id,
+    model: "server-model",
+    tokenId: 7,
+    status: "ready",
+    verified: true,
+  };
+  render(
+    <PreferencesProvider>
+      <AppProvider>
+        <SettingsPage />
+      </AppProvider>
+    </PreferencesProvider>,
+  );
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "编辑名称" }));
+  const alias = await screen.findByLabelText("别名");
+  await user.type(alias, "公司账号");
+  await user.click(screen.getByRole("button", { name: "保存" }));
+  await waitFor(() =>
+    expect(native.invoke).toHaveBeenCalledWith("rename_connection", {
+      connectionId: other.id,
+      alias: "公司账号",
+      note: null,
+    }),
+  );
+  vi.unstubAllGlobals();
 });
 
 function LogoutHarness() {

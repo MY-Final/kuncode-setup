@@ -119,6 +119,15 @@ export function ToolList({ management = false }: { management?: boolean }) {
                 </span>
               </div>
               <div className="tool-actions">
+                {ready && !config.demo && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => navigate(`/tools/${agent.id}`)}
+                  >
+                    配置详情
+                  </Button>
+                )}
                 {management && ready && (
                   <Button
                     variant="ghost"

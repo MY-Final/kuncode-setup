@@ -17,6 +17,7 @@ import type {
   AccountProfile,
   SiteToken,
   SiteGroup,
+  ToolDetail,
 } from "@/lib/types";
 
 /**
@@ -244,6 +245,31 @@ export async function restoreToolConfig(
 ): Promise<RestoreOutcome> {
   requireDesktop();
   return invoke("restore_tool_config", { agentId });
+}
+export async function renameConnection(
+  connectionId: string,
+  alias: string | null,
+  note: string | null,
+): Promise<ConnectionSummary> {
+  requireDesktop();
+  return invoke("rename_connection", { connectionId, alias, note });
+}
+export async function toolDetail(agentId: string): Promise<ToolDetail> {
+  requireDesktop();
+  return invoke("tool_detail", { agentId });
+}
+export async function revealSiteTokenKey(
+  connectionId: string,
+  tokenId: number,
+): Promise<string> {
+  requireDesktop();
+  return invoke("reveal_site_token_key", { connectionId, tokenId });
+}
+export async function pingConnection(
+  connectionId: string,
+): Promise<number | null> {
+  requireDesktop();
+  return invoke("ping_connection", { connectionId });
 }
 export async function probeToolConnection(
   agentId: string,

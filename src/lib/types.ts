@@ -73,6 +73,10 @@ export interface ConnectionSummary {
   siteUrl: string;
   apiBaseUrl: string;
   account: string | null;
+  /** 用户自定义别名，优先展示。 */
+  alias?: string | null;
+  /** 用户自定义备注。 */
+  note?: string | null;
   userId: number | null;
   legacyUserId: number | null;
   expiresAt: number | null;
@@ -154,6 +158,29 @@ export interface RestoreOutcome {
   agentId: string;
   restored: string[];
   missing: string[];
+}
+/** 与 Rust 端 ConfigFileView 对应：脱敏后的配置文件视图 */
+export interface ConfigFileView {
+  path: string;
+  exists: boolean;
+  content: string | null;
+}
+/** 与 Rust 端 ToolDetail 对应：已配置工具的详情 */
+export interface ToolDetail {
+  agentId: string;
+  agentName: string;
+  connectionId: string;
+  connectionLabel: string | null;
+  siteUrl: string;
+  baseUrl: string;
+  model: string;
+  models: string[];
+  group: string | null;
+  tokenId: number | null;
+  status: string;
+  verified: boolean;
+  configPaths: string[];
+  configFiles: ConfigFileView[];
 }
 export interface AccountProfile {
   connectionId: string;
