@@ -34,6 +34,12 @@ pub struct ConnectionSummary {
     pub site_url: String,
     pub api_base_url: String,
     pub account: Option<String>,
+    /// 用户自定义别名，优先于 account / 域名展示。
+    #[serde(default)]
+    pub alias: Option<String>,
+    /// 用户自定义备注。
+    #[serde(default)]
+    pub note: Option<String>,
     pub user_id: Option<i64>,
     pub legacy_user_id: Option<i64>,
     pub expires_at: Option<i64>,
@@ -263,6 +269,37 @@ impl BindingCheck {
     }
 }
 
+/// 工具配置文件的脱敏视图。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigFileView {
+    pub path: String,
+    pub exists: bool,
+    /// 已脱敏的文件内容；文件不存在时为 None。
+    pub content: Option<String>,
+}
+
+/// 已配置工具的详情视图。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolDetail {
+    pub agent_id: String,
+    pub agent_name: String,
+    pub connection_id: String,
+    /// 展示用连接标签：别名 > 账户 > 域名。
+    pub connection_label: Option<String>,
+    pub site_url: String,
+    pub base_url: String,
+    pub model: String,
+    pub models: Vec<String>,
+    pub group: Option<String>,
+    pub token_id: Option<i64>,
+    pub status: String,
+    pub verified: bool,
+    pub config_paths: Vec<String>,
+    pub config_files: Vec<ConfigFileView>,
+}
+
 impl ConnectionService {
     pub fn new(directory: PathBuf) -> AppResult<Self> {
         std::fs::create_dir_all(&directory)?;
@@ -439,6 +476,8 @@ impl ConnectionService {
             site_url: site,
             api_base_url: api_base,
             account: None,
+            alias: None,
+            note: None,
             user_id: None,
             legacy_user_id: input.user_id,
             expires_at: None,
@@ -1131,6 +1170,144 @@ impl ConnectionService {
         self.save(&state)
     }
 
+    /// 修改某个连接的别名与备注，其余字段保持不变。
+    pub fn rename_connection(
+        &self,
+        id: &str,
+        alias: Option<String>,
+        note: Option<String>,
+    ) -> AppResult<ConnectionSummary> {
+        let clean = |value: Option<String>| {
+            value
+                .map(|text| text.trim().to_owned())
+                .filter(|text| !text.is_empty())
+        };
+        let alias = clean(alias);
+        let note = clean(note);
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Other("连接状态暂不可用".into()))?;
+        let connection = state
+            .connections
+            .iter_mut()
+            .find(|item| item.id == id)
+            .ok_or_else(|| AppError::Auth("请选择或重新连接站点".into()))?;
+        if alias
+            .as_deref()
+            .is_some_and(|text| text.chars().count() > 50)
+        {
+            return Err(AppError::Other("别名不能超过 50 个字符".into()));
+        }
+        if note
+            .as_deref()
+            .is_some_and(|text| text.chars().count() > 200)
+        {
+            return Err(AppError::Other("备注不能超过 200 个字符".into()));
+        }
+        connection.alias = alias;
+        connection.note = note;
+        let updated = connection.clone();
+        self.save(&state)?;
+        Ok(updated)
+    }
+
+    /// 读取某个已配置工具的详情，包括脱敏后的配置文件内容。
+    pub fn tool_detail(&self, agent: &str) -> AppResult<ToolDetail> {
+        let binding = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Other("连接状态暂不可用".into()))?
+            .bindings
+            .get(agent)
+            .cloned()
+            .ok_or_else(|| AppError::Auth("请先配置此工具".into()))?;
+        let connection = self.connection(&binding.connection_id)?;
+        let provider = crate::agent::get(agent)?;
+        let key = vault::get(&connection.tool_reference(agent)).unwrap_or_default();
+        let config = agent_config(&connection, agent, &binding.model, &binding.models, &key)?;
+        let config_files = provider
+            .configuration_paths()
+            .into_iter()
+            .map(|path| {
+                let exists = path.exists();
+                let content = if exists {
+                    std::fs::read_to_string(&path)
+                        .ok()
+                        .map(|text| mask_config_text(&text, &key))
+                } else {
+                    None
+                };
+                ConfigFileView {
+                    path: path.to_string_lossy().to_string(),
+                    exists,
+                    content,
+                }
+            })
+            .collect();
+        Ok(ToolDetail {
+            agent_id: agent.into(),
+            agent_name: provider.name().into(),
+            connection_id: connection.id.clone(),
+            connection_label: connection
+                .alias
+                .clone()
+                .or_else(|| connection.account.clone()),
+            site_url: connection.site_url.clone(),
+            base_url: config.base_url.clone(),
+            model: binding.model.clone(),
+            models: if binding.models.is_empty() {
+                vec![binding.model.clone()]
+            } else {
+                binding.models.clone()
+            },
+            group: binding.group.clone(),
+            token_id: binding.token_id,
+            status: binding.status.clone(),
+            verified: binding.verified,
+            config_paths: provider
+                .configuration_paths()
+                .into_iter()
+                .map(|path| path.to_string_lossy().to_string())
+                .collect(),
+            config_files,
+        })
+    }
+
+    /// 读取某个站点密钥的明文，仅供前端一次性复制到剪贴板。
+    pub fn reveal_site_token_for_copy(&self, id: &str, token_id: i64) -> AppResult<String> {
+        let connection = self.connection(id)?;
+        let (secret, context) = self.site_connection(&connection)?;
+        SiteClient::new()?.reveal_site_token(
+            &SiteConnection {
+                site: &connection.site_url,
+                secret: &secret,
+                user_id: context.user_id,
+                desktop: context.desktop,
+            },
+            token_id,
+        )
+    }
+
+    /// 对某个连接做一次模型列表探测，返回延迟（毫秒）。
+    pub fn connection_latency(&self, id: &str) -> AppResult<Option<u64>> {
+        let connection = self.connection(id)?;
+        let secret = vault::get(&connection.credential_reference())?;
+        let started = Instant::now();
+        match SiteClient::new()?.models(
+            &connection.api_base_url,
+            &secret,
+            connection.legacy_user_id,
+            false,
+            None,
+        ) {
+            Ok(_) => Ok(Some(started.elapsed().as_millis() as u64)),
+            // 站点不提供模型列表时仍视作可达。
+            Err(AppError::Unsupported(_)) => Ok(Some(started.elapsed().as_millis() as u64)),
+            Err(error) => Err(error),
+        }
+    }
+
     /// 启动前的一致性校验：本机配置是否仍与绑定一致，绑定密钥是否仍然有效。
     /// 预期内的失败不会抛出异常，而是返回结构化状态，便于前端给出精确引导。
     pub fn check_binding(&self, agent: &str) -> AppResult<BindingCheck> {
@@ -1293,6 +1470,39 @@ impl ConnectionService {
             }
         }
     }
+}
+
+/// 脱敏配置文件文本：抹掉具体密钥值，以及常见的 sk- / Bearer 形态。
+/// 仅用于「查看实际写入的配置」，绝不返回明文。
+fn mask_config_text(text: &str, secret: &str) -> String {
+    let mut masked = text.to_owned();
+    if !secret.is_empty() {
+        masked = masked.replace(secret, "••••••••");
+    }
+    // 兜底：把 sk- 开头的长串也抹掉，避免遗漏其它密钥字段。
+    let mut result = String::with_capacity(masked.len());
+    let bytes = masked.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if masked[index..].starts_with("sk-") {
+            let start = index;
+            let mut end = index + 3;
+            let chars: Vec<char> = masked[end..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                .collect();
+            end += chars.iter().map(|c| c.len_utf8()).sum::<usize>();
+            if end - start >= 8 {
+                result.push_str("sk-••••••••");
+                index = end;
+                continue;
+            }
+        }
+        let ch = masked[index..].chars().next().unwrap();
+        result.push(ch);
+        index += ch.len_utf8();
+    }
+    result
 }
 
 fn agent_config(

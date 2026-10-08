@@ -295,6 +295,8 @@ impl ConnectionService {
                 .filter(|name| !name.is_empty())
                 .or_else(|| profile.get("username").and_then(Value::as_str))
                 .map(str::to_owned),
+            alias: None,
+            note: None,
             user_id: profile.get("id").and_then(Value::as_i64),
             legacy_user_id: None,
             expires_at: data.get("expires_at").and_then(Value::as_i64),

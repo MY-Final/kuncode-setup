@@ -80,6 +80,8 @@ fn claude_receives_root_and_other_tools_receive_v1() {
         site_url: "https://test.example".into(),
         api_base_url: "https://test.example/v1".into(),
         account: None,
+        alias: None,
+        note: None,
         user_id: None,
         legacy_user_id: None,
         expires_at: None,
@@ -283,6 +285,8 @@ fn persisted_connections_restore_bindings_and_expiry_does_not_damage_tools() {
         site_url: KUNCODE_SITE.into(),
         api_base_url: format!("{KUNCODE_SITE}/v1"),
         account: Some("owner".into()),
+        alias: None,
+        note: None,
         user_id: Some(42),
         legacy_user_id: None,
         expires_at: Some(1),
@@ -433,6 +437,8 @@ fn authorized_logout_targets_original_site_after_setting_changes() {
         site_url: site.clone(),
         api_base_url: format!("{site}/v1"),
         account: Some("local owner".into()),
+        alias: None,
+        note: None,
         user_id: Some(42),
         legacy_user_id: None,
         expires_at: None,
@@ -471,6 +477,8 @@ fn manual_logout_removes_only_local_login_and_preserves_tool_credentials() {
         site_url: "https://vault-test.example".into(),
         api_base_url: "https://vault-test.example/v1".into(),
         account: Some("test owner".into()),
+        alias: None,
+        note: None,
         user_id: Some(42),
         legacy_user_id: None,
         expires_at: None,
@@ -590,6 +598,8 @@ fn desktop_profile_parses_stable_account_contract() {
         site_url: site.clone(),
         api_base_url: format!("{site}/v1"),
         account: Some("Owner Name".into()),
+        alias: None,
+        note: None,
         user_id: Some(42),
         legacy_user_id: None,
         expires_at: Some(2000000000),
@@ -614,4 +624,15 @@ fn desktop_profile_parses_stable_account_contract() {
         ["GET /api/desktop/profile HTTP/1.1"]
     );
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn tool_detail_masks_secrets_in_written_config() {
+    let secret = "sk-abcdefghijklmnopqrstuvwxyz012345";
+    let text = format!("OPENAI_API_KEY = \"{secret}\"\nother = 1\nextra = \"sk-1234567890abcdef\"");
+    let masked = super::mask_config_text(&text, secret);
+    assert!(!masked.contains(secret));
+    assert!(!masked.contains("1234567890abcdef"));
+    assert!(masked.contains("sk-••••••••"));
+    assert!(masked.contains("other = 1"));
 }

@@ -210,6 +210,45 @@ async fn apply_connection_config(
 }
 
 #[tauri::command]
+async fn rename_connection(
+    service: State<'_, Arc<ConnectionService>>,
+    connection_id: String,
+    alias: Option<String>,
+    note: Option<String>,
+) -> Result<ConnectionSummary, ErrorPayload> {
+    let service = service.inner().clone();
+    blocking(move || service.rename_connection(&connection_id, alias, note)).await
+}
+
+#[tauri::command]
+async fn tool_detail(
+    service: State<'_, Arc<ConnectionService>>,
+    agent_id: String,
+) -> Result<connections::ToolDetail, ErrorPayload> {
+    let service = service.inner().clone();
+    blocking(move || service.tool_detail(&agent_id)).await
+}
+
+#[tauri::command]
+async fn reveal_site_token_key(
+    service: State<'_, Arc<ConnectionService>>,
+    connection_id: String,
+    token_id: i64,
+) -> Result<String, ErrorPayload> {
+    let service = service.inner().clone();
+    blocking(move || service.reveal_site_token_for_copy(&connection_id, token_id)).await
+}
+
+#[tauri::command]
+async fn ping_connection(
+    service: State<'_, Arc<ConnectionService>>,
+    connection_id: String,
+) -> Result<Option<u64>, ErrorPayload> {
+    let service = service.inner().clone();
+    blocking(move || service.connection_latency(&connection_id)).await
+}
+
+#[tauri::command]
 async fn check_tool_connection(
     service: State<'_, Arc<ConnectionService>>,
     agent_id: String,
@@ -268,6 +307,10 @@ pub fn run() {
             probe_tool_connection,
             check_tool_connection,
             restore_tool_config,
+            rename_connection,
+            tool_detail,
+            reveal_site_token_key,
+            ping_connection,
             launch_agent
         ])
         .setup(|app| {
