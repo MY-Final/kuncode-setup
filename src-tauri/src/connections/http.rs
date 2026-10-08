@@ -296,6 +296,203 @@ impl SiteClient {
         Ok((id, self.read_tool_key(site, token, user_id, id)?))
     }
 
+    /// Lists the caller's site keys (masked). Works for desktop-authorized
+    /// connections via `/api/desktop/keys`; falls back to the dashboard token
+    /// list for user-token connections.
+    pub fn list_site_tokens(&self, connection: &SiteConnection<'_>) -> AppResult<Vec<SiteToken>> {
+        let (path, user_id) = if connection.desktop {
+            (format!("{}/api/desktop/keys", connection.site), None)
+        } else {
+            (
+                format!("{}/api/token/", connection.site),
+                connection.user_id,
+            )
+        };
+        let response = self.request(
+            reqwest::Method::GET,
+            &path,
+            Some(connection.secret),
+            user_id,
+            None,
+        )?;
+        let data = response.get("data").ok_or_else(|| {
+            AppError::Unsupported("该站点无法提供密钥列表，可改用已有 API Key".into())
+        })?;
+        let rows = data
+            .get("items")
+            .and_then(Value::as_array)
+            .or_else(|| data.as_array())
+            .ok_or_else(|| {
+                AppError::Unsupported("该站点无法提供密钥列表，可改用已有 API Key".into())
+            })?;
+        Ok(rows.iter().map(site_token_from_value).collect())
+    }
+
+    /// Reveals one key's plaintext for writing into a coding tool config.
+    pub fn reveal_site_token(
+        &self,
+        connection: &SiteConnection<'_>,
+        token_id: i64,
+    ) -> AppResult<String> {
+        let (path, user_id) = if connection.desktop {
+            (
+                format!("{}/api/desktop/keys/{token_id}/reveal", connection.site),
+                None,
+            )
+        } else {
+            (
+                format!("{}/api/token/{token_id}/key", connection.site),
+                connection.user_id,
+            )
+        };
+        let response = self.request(
+            reqwest::Method::POST,
+            &path,
+            Some(connection.secret),
+            user_id,
+            None,
+        )?;
+        let key = response
+            .get("data")
+            .and_then(|value| value.get("key"))
+            .and_then(Value::as_str)
+            .filter(|key| !key.is_empty() && !key.contains('*'))
+            .ok_or_else(|| AppError::Unsupported("无法读取所选密钥，请改用已有 API Key".into()))?;
+        model_key(key)
+    }
+
+    /// Creates a new site key, returning its id and plaintext (once).
+    pub fn create_site_token(
+        &self,
+        connection: &SiteConnection<'_>,
+        name: &str,
+        group: &str,
+        model_limits: &[String],
+    ) -> AppResult<(i64, String)> {
+        let body = json!({
+            "name": name,
+            "group": group,
+            "model_limits": model_limits,
+            "unlimited_quota": true,
+            "expired_time": -1,
+        });
+        let response = self.request(
+            reqwest::Method::POST,
+            &format!("{}/api/desktop/keys", connection.site),
+            Some(connection.secret),
+            None,
+            Some(body),
+        )?;
+        let data = response
+            .get("data")
+            .ok_or_else(|| AppError::Other("无法获取新建密钥结果".into()))?;
+        let id = data
+            .get("id")
+            .and_then(Value::as_i64)
+            .filter(|id| *id > 0)
+            .ok_or_else(|| AppError::Other("无法获取新建密钥结果".into()))?;
+        let key = data
+            .get("key")
+            .and_then(Value::as_str)
+            .filter(|key| !key.is_empty() && !key.contains('*'))
+            .ok_or_else(|| AppError::Other("无法获取新建密钥结果".into()))?;
+        Ok((id, model_key(key)?))
+    }
+
+    /// Updates name, group, and model limits of one site key.
+    pub fn update_site_token(
+        &self,
+        connection: &SiteConnection<'_>,
+        token_id: i64,
+        name: &str,
+        group: &str,
+        model_limits: &[String],
+    ) -> AppResult<()> {
+        self.request(
+            reqwest::Method::PUT,
+            &format!("{}/api/desktop/keys/{token_id}", connection.site),
+            Some(connection.secret),
+            None,
+            Some(json!({"name": name, "group": group, "model_limits": model_limits})),
+        )?;
+        Ok(())
+    }
+
+    /// Deletes one site key. The server refuses when a tool still binds it.
+    pub fn delete_site_token(
+        &self,
+        connection: &SiteConnection<'_>,
+        token_id: i64,
+    ) -> AppResult<()> {
+        self.request(
+            reqwest::Method::DELETE,
+            &format!("{}/api/desktop/keys/{token_id}", connection.site),
+            Some(connection.secret),
+            None,
+            None,
+        )?;
+        Ok(())
+    }
+
+    /// Lists the groups the account may choose, with display metadata.
+    pub fn user_groups(&self, connection: &SiteConnection<'_>) -> AppResult<Vec<SiteGroup>> {
+        let response = self.request(
+            reqwest::Method::GET,
+            &format!("{}/api/user/self/groups", connection.site),
+            Some(connection.secret),
+            connection.user_id,
+            None,
+        )?;
+        let data = response.get("data").ok_or_else(|| {
+            AppError::Unsupported("该站点无法提供分组信息，可改用已有 API Key".into())
+        })?;
+        let mut groups = Vec::new();
+        if let Some(map) = data.as_object() {
+            for (name, value) in map {
+                groups.push(SiteGroup {
+                    name: name.clone(),
+                    description: value.get("desc").and_then(Value::as_str).map(str::to_owned),
+                    ratio: value.get("ratio").cloned(),
+                });
+            }
+        }
+        groups.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(groups)
+    }
+
+    /// Lists the models a chosen group enables.
+    pub fn group_models(
+        &self,
+        connection: &SiteConnection<'_>,
+        group: &str,
+    ) -> AppResult<Vec<String>> {
+        let mut url = reqwest::Url::parse(&format!("{}/api/user/models", connection.site))
+            .map_err(|_| AppError::Other("站点地址无效".into()))?;
+        url.query_pairs_mut().append_pair("group", group);
+        let response = self.request(
+            reqwest::Method::GET,
+            url.as_str(),
+            Some(connection.secret),
+            connection.user_id,
+            None,
+        )?;
+        let data = response
+            .get("data")
+            .and_then(Value::as_array)
+            .ok_or_else(|| AppError::Unsupported("该站点无法提供分组模型列表".into()))?;
+        let mut models: Vec<String> = data
+            .iter()
+            .filter_map(|item| {
+                item.as_str()
+                    .or_else(|| item.get("id").and_then(Value::as_str))
+            })
+            .map(str::to_owned)
+            .collect();
+        models.sort();
+        models.dedup();
+        Ok(models)
+    }
+
     pub fn read_tool_key(
         &self,
         site: &str,
@@ -319,6 +516,113 @@ impl SiteClient {
                 AppError::Unsupported("无法读取本次创建的密钥，请改用已有 API Key".into())
             })?;
         model_key(key)
+    }
+}
+
+/// Request context for site-level key management. `desktop` selects the
+/// desktop-authorized routes (`/api/desktop/*`) over the dashboard token API.
+pub struct SiteConnection<'a> {
+    pub site: &'a str,
+    pub secret: &'a str,
+    pub user_id: Option<i64>,
+    pub desktop: bool,
+}
+
+/// One site key as shown in the key center. The plaintext key is never part of
+/// this projection.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SiteToken {
+    pub id: i64,
+    pub name: String,
+    pub masked_key: String,
+    pub group: String,
+    pub status: i64,
+    pub unlimited_quota: bool,
+    pub remain_quota: f64,
+    pub used_quota: f64,
+    pub expired_time: i64,
+    pub accessed_time: i64,
+    pub model_limits_enabled: bool,
+    pub model_limits: Vec<String>,
+    pub bound_agents: Vec<String>,
+}
+
+/// One selectable group with its display metadata.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SiteGroup {
+    pub name: String,
+    pub description: Option<String>,
+    pub ratio: Option<Value>,
+}
+
+fn number(value: Option<&Value>) -> f64 {
+    value
+        .and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|v| v as f64)))
+        .unwrap_or(0.0)
+}
+
+fn text(value: Option<&Value>) -> String {
+    value.and_then(Value::as_str).unwrap_or_default().to_owned()
+}
+
+/// Normalizes a token row from either the desktop key API or the dashboard
+/// token list. The dashboard returns `key` (masked) and a `model_limits` map;
+/// the desktop API returns `masked_key` and a `model_limits` array.
+fn site_token_from_value(row: &Value) -> SiteToken {
+    let masked_key = row
+        .get("masked_key")
+        .and_then(Value::as_str)
+        .or_else(|| row.get("key").and_then(Value::as_str))
+        .unwrap_or_default()
+        .to_owned();
+    let model_limits = match row.get("model_limits") {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+        Some(Value::Object(map)) => map.keys().cloned().collect(),
+        _ => Vec::new(),
+    };
+    let bound_agents = row
+        .get("bound_agents")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    SiteToken {
+        id: row.get("id").and_then(Value::as_i64).unwrap_or(0),
+        name: text(row.get("name")),
+        masked_key,
+        group: text(row.get("group")),
+        status: row.get("status").and_then(Value::as_i64).unwrap_or(0),
+        unlimited_quota: row
+            .get("unlimited_quota")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        remain_quota: number(row.get("remain_quota")),
+        used_quota: number(row.get("used_quota")),
+        expired_time: row
+            .get("expired_time")
+            .and_then(Value::as_i64)
+            .unwrap_or(-1),
+        accessed_time: row
+            .get("accessed_time")
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+        model_limits_enabled: row
+            .get("model_limits_enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        model_limits,
+        bound_agents,
     }
 }
 

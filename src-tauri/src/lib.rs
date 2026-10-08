@@ -112,6 +112,72 @@ async fn logout_connection(
 }
 
 #[tauri::command]
+async fn list_site_tokens(
+    service: State<'_, Arc<ConnectionService>>,
+    connection_id: String,
+) -> Result<Vec<connections::http::SiteToken>, ErrorPayload> {
+    let service = service.inner().clone();
+    blocking(move || service.site_tokens(&connection_id)).await
+}
+
+#[tauri::command]
+async fn site_groups(
+    service: State<'_, Arc<ConnectionService>>,
+    connection_id: String,
+) -> Result<Vec<connections::http::SiteGroup>, ErrorPayload> {
+    let service = service.inner().clone();
+    blocking(move || service.site_groups(&connection_id)).await
+}
+
+#[tauri::command]
+async fn group_models(
+    service: State<'_, Arc<ConnectionService>>,
+    connection_id: String,
+    group: String,
+) -> Result<Vec<String>, ErrorPayload> {
+    let service = service.inner().clone();
+    blocking(move || service.site_group_models(&connection_id, &group)).await
+}
+
+#[tauri::command]
+async fn create_site_token(
+    service: State<'_, Arc<ConnectionService>>,
+    connection_id: String,
+    name: String,
+    group: String,
+    model_limits: Vec<String>,
+) -> Result<i64, ErrorPayload> {
+    let service = service.inner().clone();
+    blocking(move || service.create_site_token(&connection_id, &name, &group, &model_limits)).await
+}
+
+#[tauri::command]
+async fn update_site_token(
+    service: State<'_, Arc<ConnectionService>>,
+    connection_id: String,
+    token_id: i64,
+    name: String,
+    group: String,
+    model_limits: Vec<String>,
+) -> Result<(), ErrorPayload> {
+    let service = service.inner().clone();
+    blocking(move || {
+        service.update_site_token(&connection_id, token_id, &name, &group, &model_limits)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn delete_site_token(
+    service: State<'_, Arc<ConnectionService>>,
+    connection_id: String,
+    token_id: i64,
+) -> Result<(), ErrorPayload> {
+    let service = service.inner().clone();
+    blocking(move || service.delete_site_token(&connection_id, token_id)).await
+}
+
+#[tauri::command]
 async fn preview_connection_config(
     service: State<'_, Arc<ConnectionService>>,
     connection_id: String,
@@ -128,10 +194,22 @@ async fn apply_connection_config(
     connection_id: String,
     agent_id: String,
     model: String,
+    token_id: Option<i64>,
+    group: Option<String>,
     progress: Channel<ConnectionStep>,
 ) -> Result<ConfigurationOutcome, ErrorPayload> {
     let service = service.inner().clone();
-    blocking(move || service.apply(&connection_id, &agent_id, &model, Some(&progress))).await
+    blocking(move || {
+        service.apply(
+            &connection_id,
+            &agent_id,
+            &model,
+            token_id,
+            group,
+            Some(&progress),
+        )
+    })
+    .await
 }
 
 #[tauri::command]
@@ -164,6 +242,12 @@ pub fn run() {
             connection_models,
             connection_profile,
             logout_connection,
+            list_site_tokens,
+            site_groups,
+            group_models,
+            create_site_token,
+            update_site_token,
+            delete_site_token,
             preview_connection_config,
             apply_connection_config,
             probe_tool_connection,

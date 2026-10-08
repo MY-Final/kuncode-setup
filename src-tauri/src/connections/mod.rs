@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::agent::model::{AgentConfig, ConfigPreview, TestResult};
 use crate::error::{AppError, AppResult};
-use http::{normalize_url, SiteClient, KUNCODE_SITE};
+use http::{normalize_url, SiteClient, SiteConnection, KUNCODE_SITE};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -85,6 +85,8 @@ pub struct ToolBinding {
     pub agent_id: String,
     pub connection_id: String,
     pub model: String,
+    #[serde(default)]
+    pub group: Option<String>,
     pub token_id: Option<i64>,
     pub status: String,
     pub verified: bool,
@@ -162,6 +164,12 @@ pub struct AccountProfile {
     pub expires_at: Option<i64>,
     pub connected: bool,
 }
+/// Request-context values derived from a connection for site key calls.
+struct SiteContext {
+    user_id: Option<i64>,
+    desktop: bool,
+}
+
 pub struct ConnectionService {
     state: Mutex<LocalState>,
     directory: PathBuf,
@@ -553,6 +561,123 @@ impl ConnectionService {
         )
     }
 
+    /// Builds the request context for site-level key management. Desktop
+    /// connections use the dedicated desktop key API; user-token connections
+    /// use the dashboard token API.
+    fn site_connection(&self, connection: &ConnectionSummary) -> AppResult<(String, SiteContext)> {
+        let secret = vault::get(&connection.credential_reference())?;
+        let context = SiteContext {
+            user_id: if connection.kind == ConnectionKind::KuncodeAuthorized {
+                None
+            } else {
+                connection.legacy_user_id
+            },
+            desktop: connection.kind == ConnectionKind::KuncodeAuthorized,
+        };
+        Ok((secret, context))
+    }
+
+    pub fn site_tokens(&self, id: &str) -> AppResult<Vec<http::SiteToken>> {
+        let connection = self.connection(id)?;
+        let (secret, context) = self.site_connection(&connection)?;
+        SiteClient::new()?.list_site_tokens(&SiteConnection {
+            site: &connection.site_url,
+            secret: &secret,
+            user_id: context.user_id,
+            desktop: context.desktop,
+        })
+    }
+
+    pub fn site_groups(&self, id: &str) -> AppResult<Vec<http::SiteGroup>> {
+        let connection = self.connection(id)?;
+        let (secret, context) = self.site_connection(&connection)?;
+        SiteClient::new()?.user_groups(&SiteConnection {
+            site: &connection.site_url,
+            secret: &secret,
+            user_id: context.user_id,
+            desktop: context.desktop,
+        })
+    }
+
+    pub fn site_group_models(&self, id: &str, group: &str) -> AppResult<Vec<String>> {
+        let connection = self.connection(id)?;
+        let (secret, context) = self.site_connection(&connection)?;
+        SiteClient::new()?.group_models(
+            &SiteConnection {
+                site: &connection.site_url,
+                secret: &secret,
+                user_id: context.user_id,
+                desktop: context.desktop,
+            },
+            group,
+        )
+    }
+
+    pub fn create_site_token(
+        &self,
+        id: &str,
+        name: &str,
+        group: &str,
+        model_limits: &[String],
+    ) -> AppResult<i64> {
+        let connection = self.connection(id)?;
+        let (secret, context) = self.site_connection(&connection)?;
+        let (token_id, key) = SiteClient::new()?.create_site_token(
+            &SiteConnection {
+                site: &connection.site_url,
+                secret: &secret,
+                user_id: context.user_id,
+                desktop: context.desktop,
+            },
+            name,
+            group,
+            model_limits,
+        )?;
+        vault::put(
+            &connection.tool_reference(&format!("token-{token_id}")),
+            &key,
+        )?;
+        Ok(token_id)
+    }
+
+    pub fn update_site_token(
+        &self,
+        id: &str,
+        token_id: i64,
+        name: &str,
+        group: &str,
+        model_limits: &[String],
+    ) -> AppResult<()> {
+        let connection = self.connection(id)?;
+        let (secret, context) = self.site_connection(&connection)?;
+        SiteClient::new()?.update_site_token(
+            &SiteConnection {
+                site: &connection.site_url,
+                secret: &secret,
+                user_id: context.user_id,
+                desktop: context.desktop,
+            },
+            token_id,
+            name,
+            group,
+            model_limits,
+        )
+    }
+
+    pub fn delete_site_token(&self, id: &str, token_id: i64) -> AppResult<()> {
+        let connection = self.connection(id)?;
+        let (secret, context) = self.site_connection(&connection)?;
+        SiteClient::new()?.delete_site_token(
+            &SiteConnection {
+                site: &connection.site_url,
+                secret: &secret,
+                user_id: context.user_id,
+                desktop: context.desktop,
+            },
+            token_id,
+        )
+    }
+
     pub fn logout(&self, id: &str) -> AppResult<Option<String>> {
         let connection = self.connection(id)?;
         let warning = if connection.kind == ConnectionKind::KuncodeAuthorized {
@@ -607,6 +732,8 @@ impl ConnectionService {
         id: &str,
         agent: &str,
         model: &str,
+        token_id: Option<i64>,
+        group: Option<String>,
         progress: Option<&Channel<ConnectionStep>>,
     ) -> AppResult<ConfigurationOutcome> {
         let _operation = self
@@ -649,7 +776,115 @@ impl ConnectionService {
             steps.push(result);
         };
         emit("检查环境", "complete", None);
-        // All managed issuance happens only after the user confirms.
+        // Two paths: bind a key the user picked in the key center, or fall back
+        // to the legacy flow that issues a dedicated key per tool.
+        if let Some(selected_id) = token_id {
+            let (secret, context) = self.site_connection(&connection)?;
+            let group = group.unwrap_or_default();
+            if context.desktop {
+                let token = vault::get(&connection.credential_reference())?;
+                SiteClient::new()?.request(
+                    reqwest::Method::PUT,
+                    &format!("{}/api/desktop/tools/{agent}", connection.site_url),
+                    Some(&token),
+                    None,
+                    Some(json!({"token_id": selected_id, "group": group, "models": [model]})),
+                )?;
+            }
+            let key = SiteClient::new()?.reveal_site_token(
+                &SiteConnection {
+                    site: &connection.site_url,
+                    secret: &secret,
+                    user_id: context.user_id,
+                    desktop: context.desktop,
+                },
+                selected_id,
+            )?;
+            let key_reference = connection.tool_reference(agent);
+            vault::put(&key_reference, &key)?;
+            {
+                let mut state = self
+                    .state
+                    .lock()
+                    .map_err(|_| AppError::Other("连接状态暂不可用".into()))?;
+                state
+                    .tool_keys
+                    .insert(key_reference.clone(), Some(selected_id));
+                state.pending_keys.remove(&key_reference);
+                self.save(&state)?;
+            }
+            emit("准备工具凭据", "complete", None);
+            provider.backup()?;
+            emit("备份原配置", "complete", None);
+            let originals: Vec<_> = provider
+                .configuration_paths()
+                .into_iter()
+                .map(|path| {
+                    let bytes = match std::fs::read(&path) {
+                        Ok(bytes) => Ok(Some(bytes)),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                        Err(error) => Err(AppError::from(error)),
+                    }?;
+                    Ok((path, bytes))
+                })
+                .collect::<AppResult<Vec<_>>>()?;
+            if let Err(error) = provider.configure(&agent_config(&connection, agent, model, &key)?)
+            {
+                for (path, bytes) in &originals {
+                    match bytes {
+                        Some(bytes) => {
+                            std::fs::write(path, bytes)?;
+                        }
+                        None if path.exists() => {
+                            std::fs::remove_file(path)?;
+                        }
+                        _ => {}
+                    }
+                }
+                return Err(error);
+            }
+            emit("写入配置", "complete", None);
+            let mut binding = ToolBinding {
+                agent_id: agent.into(),
+                connection_id: id.into(),
+                model: model.into(),
+                group: if group.is_empty() {
+                    None
+                } else {
+                    Some(group.clone())
+                },
+                token_id: Some(selected_id),
+                status: "ready".into(),
+                verified: false,
+            };
+            match SiteClient::new()?.models(&connection.api_base_url, &key, None, false, None) {
+                Ok(_) => {
+                    binding.verified = true;
+                    emit(
+                        "检查服务连接",
+                        "complete",
+                        Some("凭据可读取模型列表；未执行付费推理".into()),
+                    );
+                }
+                Err(AppError::Auth(_)) => {
+                    binding.status = "error".into();
+                    emit(
+                        "检查服务连接",
+                        "error",
+                        Some("工具密钥无效或权限不足".into()),
+                    );
+                }
+                Err(_) => {
+                    emit(
+                        "检查服务连接",
+                        "warning",
+                        Some("配置已保存，连接尚未验证；可以稍后重试".into()),
+                    );
+                }
+            }
+            self.record_binding(binding.clone())?;
+            return Ok(ConfigurationOutcome { binding, steps });
+        }
         let key_reference = connection.tool_reference(agent);
         let mut token_id = None;
         let key = if connection.kind == ConnectionKind::ApiKey {
@@ -780,6 +1015,7 @@ impl ConnectionService {
             agent_id: agent.into(),
             connection_id: id.into(),
             model: model.into(),
+            group: None,
             token_id,
             status: "ready".into(),
             verified: false,
