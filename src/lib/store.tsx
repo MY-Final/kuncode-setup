@@ -23,6 +23,8 @@ export interface ToolConfiguration {
   demo: boolean;
   status: "ready" | "error";
   connectionId?: string;
+  group?: string | null;
+  tokenId?: number | null;
   verified?: boolean;
 }
 interface AppState {
@@ -138,6 +140,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         demo: false,
         status: binding.status,
         connectionId: binding.connectionId,
+        group: binding.group,
+        tokenId: binding.tokenId,
         verified: binding.verified,
       };
     });

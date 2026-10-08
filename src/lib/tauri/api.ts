@@ -13,6 +13,8 @@ import type {
   ImportConnection,
   ConfigurationOutcome,
   AccountProfile,
+  SiteToken,
+  SiteGroup,
 } from "@/lib/types";
 
 /**
@@ -130,6 +132,60 @@ export async function logoutConnection(
   requireDesktop();
   return invoke("logout_connection", { connectionId });
 }
+export async function listSiteTokens(
+  connectionId: string,
+): Promise<SiteToken[]> {
+  if (!isTauri()) return mock.mockListSiteTokens();
+  return invoke("list_site_tokens", { connectionId });
+}
+export async function siteGroups(connectionId: string): Promise<SiteGroup[]> {
+  if (!isTauri()) return mock.mockSiteGroups();
+  return invoke("site_groups", { connectionId });
+}
+export async function groupModels(
+  connectionId: string,
+  group: string,
+): Promise<string[]> {
+  if (!isTauri()) return mock.mockGroupModels();
+  return invoke("group_models", { connectionId, group });
+}
+export async function createSiteToken(
+  connectionId: string,
+  name: string,
+  group: string,
+  modelLimits: string[],
+): Promise<number> {
+  requireDesktop();
+  return invoke("create_site_token", {
+    connectionId,
+    name,
+    group,
+    modelLimits,
+  });
+}
+export async function updateSiteToken(
+  connectionId: string,
+  tokenId: number,
+  name: string,
+  group: string,
+  modelLimits: string[],
+): Promise<void> {
+  requireDesktop();
+  return invoke("update_site_token", {
+    connectionId,
+    tokenId,
+    name,
+    group,
+    modelLimits,
+  });
+}
+export async function deleteSiteToken(
+  connectionId: string,
+  tokenId: number,
+): Promise<void> {
+  requireDesktop();
+  return invoke("delete_site_token", { connectionId, tokenId });
+}
 export async function previewConnection(
   connectionId: string,
   agentId: string,
@@ -143,6 +199,8 @@ export async function applyConnection(
   agentId: string,
   model: string,
   onStep: (step: ConnectionStep) => void,
+  tokenId?: number,
+  group?: string,
 ): Promise<ConfigurationOutcome> {
   requireDesktop();
   const progress = new Channel<ConnectionStep>();
@@ -151,6 +209,8 @@ export async function applyConnection(
     connectionId,
     agentId,
     model,
+    tokenId: tokenId ?? null,
+    group: group ?? null,
     progress,
   });
 }

@@ -16,10 +16,15 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useApp } from "@/lib/store";
 import * as api from "@/lib/tauri/api";
 import { DEMO_MODELS, DEFAULT_BASE_URL } from "@/lib/data/models";
-import type { ConfigPreview, ConnectionStep } from "@/lib/types";
+import type {
+  ConfigPreview,
+  ConnectionStep,
+  SiteGroup,
+  SiteToken,
+} from "@/lib/types";
 import { cn, errorMessage } from "@/lib/utils";
 
-type Stage = "connect" | "model" | "preview";
+type Stage = "connect" | "key" | "model" | "preview";
 const labels = [
   "检查环境",
   "准备工具凭据",
@@ -49,6 +54,14 @@ export default function SetupPage() {
   const [demo, setDemo] = useState(false);
   const [model, setModel] = useState(config?.model ?? "");
   const [models, setModels] = useState<string[]>([]);
+  const [tokens, setTokens] = useState<SiteToken[]>([]);
+  const [groups, setGroups] = useState<SiteGroup[]>([]);
+  const [tokenId, setTokenId] = useState<number | null>(
+    config?.tokenId ?? null,
+  );
+  const [group, setGroup] = useState<string>(config?.group ?? "");
+  const [keyLoading, setKeyLoading] = useState(false);
+  const [keyNotice, setKeyNotice] = useState<string | null>(null);
   const [modelLoading, setModelLoading] = useState(false);
   const [manualModel, setManualModel] = useState(false);
   const [modelNotice, setModelNotice] = useState<string | null>(null);
@@ -73,8 +86,10 @@ export default function SetupPage() {
     setModels([]);
     setManualModel(false);
     setModelNotice(null);
-    api
-      .connectionModels(connectionId)
+    (group
+      ? api.groupModels(connectionId, group)
+      : api.connectionModels(connectionId)
+    )
       .then((values) => {
         if (!active) return;
         setModels(values);
@@ -105,7 +120,48 @@ export default function SetupPage() {
     return () => {
       active = false;
     };
-  }, [stage, demo, connectionId, selected?.kind]);
+  }, [stage, demo, connectionId, selected?.kind, group]);
+  useEffect(() => {
+    if (stage !== "key" || demo || !connectionId) return;
+    let active = true;
+    setKeyLoading(true);
+    setKeyNotice(null);
+    setError(null);
+    Promise.all([
+      api.listSiteTokens(connectionId),
+      api.siteGroups(connectionId).catch(() => [] as SiteGroup[]),
+    ])
+      .then(([values, groupValues]) => {
+        if (!active) return;
+        setTokens(values);
+        setGroups(groupValues);
+        const usable = values.filter((item) => item.status === 1);
+        setTokenId((previous) =>
+          usable.some((item) => item.id === previous)
+            ? previous
+            : (usable[0]?.id ?? null),
+        );
+        const first = usable[0];
+        if (first) {
+          setGroup((previous) =>
+            previous && groupValues.some((g) => g.name === previous)
+              ? previous
+              : first.group || groupValues[0]?.name || "",
+          );
+        }
+        if (!values.length)
+          setKeyNotice("这个账户还没有密钥，可以先到「密钥与分组」新建一个。");
+      })
+      .catch((value: unknown) => {
+        if (active) setError(errorMessage(value));
+      })
+      .finally(() => {
+        if (active) setKeyLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [stage, demo, connectionId]);
   async function handlePreview(event: FormEvent) {
     event.preventDefault();
     if (busy || !model.trim()) return;
@@ -183,6 +239,8 @@ export default function SetupPage() {
               progress: (partial.length / labels.length) * 100,
             });
           },
+          tokenId ?? undefined,
+          group || undefined,
         );
         await refreshConnections();
         const success = outcome.binding.status === "ready";
@@ -235,7 +293,9 @@ export default function SetupPage() {
         onClick={() => {
           setError(null);
           if (stage === "connect") navigate("/");
-          else setStage(stage === "preview" ? "model" : "connect");
+          else if (stage === "preview") setStage("model");
+          else if (stage === "model") setStage(tokenId ? "key" : "connect");
+          else setStage("connect");
         }}
       >
         <ArrowLeft />
@@ -245,21 +305,33 @@ export default function SetupPage() {
         title={
           stage === "connect"
             ? `配置 ${agent.name}`
-            : stage === "model"
-              ? "选择模型"
-              : "确认配置"
+            : stage === "key"
+              ? "选择密钥"
+              : stage === "model"
+                ? "选择模型"
+                : "确认配置"
         }
         description={
           stage === "connect"
             ? "选择站点连接，其他配置交给程序。"
-            : stage === "model"
-              ? "选择这个站点提供的模型。"
-              : "确认后开始检查环境、创建工具凭据并保存配置。"
+            : stage === "key"
+              ? "选择这个账户下要使用的密钥和分组。"
+              : stage === "model"
+                ? "选择这个分组提供的模型。"
+                : "确认后开始检查环境、写入密钥并保存配置。"
         }
       />
       <div className="setup-container">
         <SetupStepper
-          step={stage === "connect" ? 0 : stage === "model" ? 1 : 2}
+          step={
+            stage === "connect"
+              ? 0
+              : stage === "key"
+                ? 1
+                : stage === "model"
+                  ? 2
+                  : 3
+          }
         />
         {error && (
           <p className="inline-error" role="alert">
@@ -325,7 +397,7 @@ export default function SetupPage() {
                   variant="outline"
                   onClick={() => {
                     setDemo(false);
-                    setStage("model");
+                    setStage("key");
                   }}
                 >
                   使用此连接
@@ -351,6 +423,105 @@ export default function SetupPage() {
                 浏览器演示不会登录账户、创建密钥或写入本机配置。
               </p>
             )}
+          </section>
+        )}
+        {stage === "key" && (
+          <section className="connection-section">
+            <h2>选择密钥</h2>
+            <p>选择一把站点密钥，并决定它使用哪个分组。</p>
+            {keyLoading && (
+              <p role="status">
+                <Loader2 className="animate-spin inline" />
+                正在获取密钥列表…
+              </p>
+            )}
+            {!keyLoading && tokens.length > 0 && (
+              <RadioGroup
+                aria-label="选择密钥"
+                value={tokenId ? String(tokenId) : ""}
+                onValueChange={(value) => {
+                  const id = Number(value);
+                  setTokenId(id);
+                  const picked = tokens.find((item) => item.id === id);
+                  if (picked?.group) setGroup(picked.group);
+                }}
+                className="connection-list"
+              >
+                {tokens.map((token) => {
+                  const usable = token.status === 1;
+                  return (
+                    <label
+                      key={token.id}
+                      className="model-row"
+                      htmlFor={`token-${token.id}`}
+                    >
+                      <RadioGroupItem
+                        id={`token-${token.id}`}
+                        value={String(token.id)}
+                        disabled={!usable}
+                      />
+                      <span className="model-copy">
+                        <strong>{token.name}</strong>
+                        <span>{token.maskedKey}</span>
+                        <span>
+                          {token.group ? `分组 ${token.group}` : "默认分组"}
+                          {" · "}
+                          {token.unlimitedQuota
+                            ? "无限额度"
+                            : `剩余 ${token.remainQuota}`}
+                          {!usable && " · 已停用"}
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </RadioGroup>
+            )}
+            {groups.length > 0 && (
+              <div className="form-field">
+                <Label htmlFor="token-group">分组</Label>
+                <select
+                  id="token-group"
+                  className="model-select"
+                  value={group}
+                  onChange={(event) => setGroup(event.target.value)}
+                >
+                  {groups.map((item) => (
+                    <option key={item.name} value={item.name}>
+                      {item.description
+                        ? `${item.name} · ${item.description}`
+                        : item.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="page-footnote">
+                  分组决定费率、可用模型与限速。
+                </p>
+              </div>
+            )}
+            {keyNotice && (
+              <p className="page-footnote" role="status">
+                {keyNotice}
+              </p>
+            )}
+            <div className="connection-entry">
+              <Button
+                variant="outline"
+                onClick={() => navigate("/keys")}
+              >
+                管理密钥
+              </Button>
+              <Button
+                onClick={() => {
+                  setError(null);
+                  setStage("model");
+                }}
+                disabled={keyLoading || !tokenId}
+              >
+                使用此密钥
+                <ArrowRight />
+              </Button>
+            </div>
           </section>
         )}
         {stage === "model" && (
@@ -458,7 +629,9 @@ export default function SetupPage() {
         onConnected={(connection) => {
           setConnectionId(connection.id);
           setDemo(false);
-          setStage("model");
+          setTokenId(null);
+          setGroup("");
+          setStage("key");
         }}
       />
       <OperationDialog
@@ -472,3 +645,7 @@ export default function SetupPage() {
     </>
   );
 }
+
+
+
+

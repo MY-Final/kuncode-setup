@@ -83,9 +83,34 @@ export interface ToolBinding {
   agentId: string;
   connectionId: string;
   model: string;
+  group?: string | null;
   tokenId: number | null;
   status: "ready" | "error";
   verified: boolean;
+}
+
+/** 站点密钥（token），与 Rust 端 http::SiteToken 对应。列表永远只返回掩码。 */
+export interface SiteToken {
+  id: number;
+  name: string;
+  maskedKey: string;
+  group: string;
+  status: number;
+  unlimitedQuota: boolean;
+  remainQuota: number;
+  usedQuota: number;
+  expiredTime: number;
+  accessedTime: number;
+  modelLimitsEnabled: boolean;
+  modelLimits: string[];
+  boundAgents: string[];
+}
+
+/** 站点分组，与 Rust 端 http::SiteGroup 对应。 */
+export interface SiteGroup {
+  name: string;
+  description: string | null;
+  ratio: string | number | null;
 }
 export interface ConnectionSnapshot {
   authorizationSite: string;
