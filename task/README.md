@@ -32,4 +32,4 @@ Phase 1 已完成，见 `achieved/phase-1-key-center-mvp.md`。
 Phase 2 已完成，见 `achieved/phase-2-multi-model-and-groups.md`。
 Phase 3 已完成，见 `achieved/phase-3-switch-and-consistency.md`。
 Phase 4 已完成，见 `achieved/phase-4-polish.md`。
-Phase 5 进行中，见 `doing/phase-5-tool-detail-center.md`。
+Phase 5 已完成，见 `achieved/phase-5-tool-detail-center.md`。
