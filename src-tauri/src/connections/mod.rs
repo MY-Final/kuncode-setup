@@ -218,6 +218,51 @@ pub struct ConfigurationOutcome {
     pub steps: Vec<ConnectionStep>,
 }
 
+/// 从备份恢复某个工具配置后的结果。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreOutcome {
+    pub agent_id: String,
+    /// 已从备份恢复的配置文件路径。
+    pub restored: Vec<String>,
+    /// 没有找到备份、保持原样的配置文件路径。
+    pub missing: Vec<String>,
+}
+
+/// 启动前一致性校验结果。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BindingCheck {
+    pub agent_id: String,
+    pub ok: bool,
+    /// 失败类别：config（本机配置损坏）/ key（密钥失效）/ network（网络不可用）。
+    pub reason: String,
+    /// 是否建议直接换绑其他密钥。
+    pub needs_rebind: bool,
+    pub message: String,
+}
+
+impl BindingCheck {
+    fn ok(agent: &str) -> Self {
+        Self {
+            agent_id: agent.into(),
+            ok: true,
+            reason: "ok".into(),
+            needs_rebind: false,
+            message: "本机配置与站点密钥一致".into(),
+        }
+    }
+    fn rebind(agent: &str, message: &str) -> Self {
+        Self {
+            agent_id: agent.into(),
+            ok: false,
+            reason: "key".into(),
+            needs_rebind: true,
+            message: message.into(),
+        }
+    }
+}
+
 impl ConnectionService {
     pub fn new(directory: PathBuf) -> AppResult<Self> {
         std::fs::create_dir_all(&directory)?;
@@ -1084,6 +1129,115 @@ impl ConnectionService {
             .map_err(|_| AppError::Other("连接状态暂不可用".into()))?;
         state.bindings.insert(binding.agent_id.clone(), binding);
         self.save(&state)
+    }
+
+    /// 启动前的一致性校验：本机配置是否仍与绑定一致，绑定密钥是否仍然有效。
+    /// 预期内的失败不会抛出异常，而是返回结构化状态，便于前端给出精确引导。
+    pub fn check_binding(&self, agent: &str) -> AppResult<BindingCheck> {
+        let binding = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Other("连接状态暂不可用".into()))?
+            .bindings
+            .get(agent)
+            .cloned()
+            .ok_or_else(|| AppError::Auth("请先配置此工具".into()))?;
+        let connection = self.connection(&binding.connection_id)?;
+        let key = match vault::get(&connection.tool_reference(agent)) {
+            Ok(key) => key,
+            Err(_) => {
+                self.mark_binding_error(agent)?;
+                return Ok(BindingCheck::rebind(
+                    agent,
+                    "工具密钥已从本机凭据中丢失，请重新换绑密钥",
+                ));
+            }
+        };
+        let matches = crate::agent::get(agent)?.configuration_matches(&agent_config(
+            &connection,
+            agent,
+            &binding.model,
+            &binding.models,
+            &key,
+        )?)?;
+        if !matches {
+            self.mark_binding_error(agent)?;
+            return Ok(BindingCheck {
+                agent_id: agent.into(),
+                ok: false,
+                reason: "config".into(),
+                needs_rebind: false,
+                message: "本机工具配置已被修改或损坏，请重新配置或恢复备份".into(),
+            });
+        }
+        match SiteClient::new()?.models(&connection.api_base_url, &key, None, false, None) {
+            Ok(_) => Ok(BindingCheck::ok(agent)),
+            Err(AppError::Unsupported(_)) => Ok(BindingCheck::ok(agent)),
+            Err(AppError::Auth(_)) => {
+                self.mark_binding_error(agent)?;
+                Ok(BindingCheck::rebind(
+                    agent,
+                    "绑定的密钥已在站点失效或被停用，请换绑其他可用密钥",
+                ))
+            }
+            Err(error) => Ok(BindingCheck {
+                agent_id: agent.into(),
+                ok: false,
+                reason: "network".into(),
+                needs_rebind: false,
+                message: format!("暂时无法确认连接状态：{error}"),
+            }),
+        }
+    }
+
+    fn mark_binding_error(&self, agent: &str) -> AppResult<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Other("连接状态暂不可用".into()))?;
+        if let Some(binding) = state.bindings.get_mut(agent) {
+            binding.status = "error".into();
+        }
+        self.save(&state)
+    }
+
+    /// 用最近一次备份恢复某个工具的原始配置，并解除本机绑定。
+    pub fn restore_agent(&self, agent: &str) -> AppResult<RestoreOutcome> {
+        let _operation = self
+            .operation
+            .try_lock()
+            .map_err(|_| AppError::Other("另一个配置正在进行，请稍后再试".into()))?;
+        let provider = crate::agent::get(agent)?;
+        let mut restored = Vec::new();
+        let mut missing = Vec::new();
+        for path in provider.configuration_paths() {
+            match crate::config::latest_backup(&path)? {
+                Some(backup) => {
+                    crate::config::restore_file(&backup, &path)?;
+                    restored.push(path.to_string_lossy().to_string());
+                }
+                None => missing.push(path.to_string_lossy().to_string()),
+            }
+        }
+        if restored.is_empty() {
+            return Err(AppError::NotFound(format!(
+                "{} 没有可恢复的备份",
+                provider.name()
+            )));
+        }
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| AppError::Other("连接状态暂不可用".into()))?;
+            state.bindings.remove(agent);
+            self.save(&state)?;
+        }
+        Ok(RestoreOutcome {
+            agent_id: agent.into(),
+            restored,
+            missing,
+        })
     }
 
     pub fn probe_binding(&self, agent: &str) -> AppResult<TestResult> {

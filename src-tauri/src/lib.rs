@@ -210,6 +210,24 @@ async fn apply_connection_config(
 }
 
 #[tauri::command]
+async fn check_tool_connection(
+    service: State<'_, Arc<ConnectionService>>,
+    agent_id: String,
+) -> Result<connections::BindingCheck, ErrorPayload> {
+    let service = service.inner().clone();
+    blocking(move || service.check_binding(&agent_id)).await
+}
+
+#[tauri::command]
+async fn restore_tool_config(
+    service: State<'_, Arc<ConnectionService>>,
+    agent_id: String,
+) -> Result<connections::RestoreOutcome, ErrorPayload> {
+    let service = service.inner().clone();
+    blocking(move || service.restore_agent(&agent_id)).await
+}
+
+#[tauri::command]
 async fn probe_tool_connection(
     service: State<'_, Arc<ConnectionService>>,
     agent_id: String,
@@ -248,6 +266,8 @@ pub fn run() {
             preview_connection_config,
             apply_connection_config,
             probe_tool_connection,
+            check_tool_connection,
+            restore_tool_config,
             launch_agent
         ])
         .setup(|app| {
