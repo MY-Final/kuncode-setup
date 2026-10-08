@@ -33,6 +33,8 @@ export default function KeysPage() {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [group, setGroup] = useState("");
+  const [groupModels, setGroupModels] = useState<string[]>([]);
+  const [limits, setLimits] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
   const usableConnections = connections.filter((item) => item.connected);
@@ -71,17 +73,38 @@ export default function KeysPage() {
     void load(connectionId);
   }, [connectionId, load, usableIds]);
 
+  useEffect(() => {
+    if (!creating && editing === null) return;
+    if (!connectionId || !group) {
+      setGroupModels([]);
+      return;
+    }
+    let active = true;
+    api
+      .groupModels(connectionId, group)
+      .then((values) => {
+        if (active) setGroupModels(values);
+      })
+      .catch(() => {
+        if (active) setGroupModels([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [creating, editing, connectionId, group]);
   function openCreate() {
     setCreating(true);
     setEditing(null);
     setName("");
     setGroup(groups[0]?.name ?? "");
+    setLimits([]);
   }
   function openEdit(token: SiteToken) {
     setEditing(token);
     setCreating(false);
     setName(token.name);
     setGroup(token.group || groups[0]?.name || "");
+    setLimits(token.modelLimits);
   }
   async function save() {
     if (saving || !name.trim() || !connectionId) return;
@@ -94,10 +117,10 @@ export default function KeysPage() {
           editing.id,
           name.trim(),
           group,
-          editing.modelLimits,
+          limits,
         );
       } else {
-        await api.createSiteToken(connectionId, name.trim(), group, []);
+        await api.createSiteToken(connectionId, name.trim(), group, limits);
       }
       setCreating(false);
       setEditing(null);
@@ -276,6 +299,33 @@ export default function KeysPage() {
               ))}
             </select>
             <p className="page-footnote">分组决定费率、可用模型与限速。</p>
+          </div>
+          <div className="form-field">
+            <Label>允许的模型</Label>
+            <p className="page-footnote">
+              不勾选表示该密钥可使用分组内全部模型。
+            </p>
+            <div className="key-model-list">
+              {groupModels.length === 0 && (
+                <span className="page-footnote">该分组暂无模型数据。</span>
+              )}
+              {groupModels.map((item) => (
+                <label key={item} className="key-model-item">
+                  <input
+                    type="checkbox"
+                    checked={limits.includes(item)}
+                    onChange={() =>
+                      setLimits((previous) =>
+                        previous.includes(item)
+                          ? previous.filter((id) => id !== item)
+                          : [...previous, item],
+                      )
+                    }
+                  />
+                  {item}
+                </label>
+              ))}
+            </div>
           </div>
           <div className="setup-form-footer">
             <Button

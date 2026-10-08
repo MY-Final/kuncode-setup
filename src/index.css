@@ -811,6 +811,19 @@
   font-size: 12px;
   font-weight: 500;
 }
+.key-model-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 6px;
+}
+.key-model-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--foreground);
+}
 .model-select {
   width: 100%;
   border: 1px solid var(--input);
