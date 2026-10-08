@@ -135,6 +135,11 @@ pub(super) fn write_configuration(path: &std::path::Path, config: &AgentConfig) 
     if !providers.is_object() {
         *providers = serde_json::json!({});
     }
+    let models: serde_json::Map<String, serde_json::Value> = config
+        .effective_models()
+        .into_iter()
+        .map(|model| (model.clone(), serde_json::json!({ "name": model })))
+        .collect();
     providers.as_object_mut().unwrap().insert(
         "kuncode".into(),
         serde_json::json!({
@@ -144,9 +149,7 @@ pub(super) fn write_configuration(path: &std::path::Path, config: &AgentConfig) 
                 "baseURL": config.base_url,
                 "apiKey": config.api_key,
             },
-            "models": {
-                config.model.clone(): { "name": config.model.clone() }
-            }
+            "models": models,
         }),
     );
 

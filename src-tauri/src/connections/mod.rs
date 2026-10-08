@@ -86,6 +86,8 @@ pub struct ToolBinding {
     pub connection_id: String,
     pub model: String,
     #[serde(default)]
+    pub models: Vec<String>,
+    #[serde(default)]
     pub group: Option<String>,
     pub token_id: Option<i64>,
     pub status: String,
@@ -168,6 +170,19 @@ pub struct AccountProfile {
 struct SiteContext {
     user_id: Option<i64>,
     desktop: bool,
+}
+
+/// Model and key selection for one `apply` call.
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplySelection {
+    pub model: String,
+    #[serde(default)]
+    pub models: Vec<String>,
+    #[serde(default)]
+    pub token_id: Option<i64>,
+    #[serde(default)]
+    pub group: Option<String>,
 }
 
 pub struct ConnectionService {
@@ -713,10 +728,16 @@ impl ConnectionService {
         Ok(warning)
     }
 
-    pub fn preview(&self, id: &str, agent: &str, model: &str) -> AppResult<ConfigPreview> {
+    pub fn preview(
+        &self,
+        id: &str,
+        agent: &str,
+        model: &str,
+        models: &[String],
+    ) -> AppResult<ConfigPreview> {
         let connection = self.connection(id)?;
         let provider = crate::agent::get(agent)?;
-        let config = agent_config(&connection, agent, model, "")?;
+        let config = agent_config(&connection, agent, model, models, "")?;
         let mut preview = provider.preview(&config)?;
         preview.provider = reqwest::Url::parse(&connection.site_url)
             .unwrap()
@@ -731,18 +752,20 @@ impl ConnectionService {
         &self,
         id: &str,
         agent: &str,
-        model: &str,
-        token_id: Option<i64>,
-        group: Option<String>,
+        selection: ApplySelection,
         progress: Option<&Channel<ConnectionStep>>,
     ) -> AppResult<ConfigurationOutcome> {
+        let model = selection.model.as_str();
+        let models = selection.models;
+        let token_id = selection.token_id;
+        let group = selection.group;
         let _operation = self
             .operation
             .try_lock()
             .map_err(|_| AppError::Other("另一个配置正在进行，请稍后再试".into()))?;
         let connection = self.connection(id)?;
         let provider = crate::agent::get(agent)?;
-        agent_config(&connection, agent, model, "")?;
+        agent_config(&connection, agent, model, &models, "")?;
         if !connection.connected
             || connection
                 .expires_at
@@ -788,7 +811,7 @@ impl ConnectionService {
                     &format!("{}/api/desktop/tools/{agent}", connection.site_url),
                     Some(&token),
                     None,
-                    Some(json!({"token_id": selected_id, "group": group, "models": [model]})),
+                    Some(json!({"token_id": selected_id, "group": group, "models": models})),
                 )?;
             }
             let key = SiteClient::new()?.reveal_site_token(
@@ -828,7 +851,8 @@ impl ConnectionService {
                     Ok((path, bytes))
                 })
                 .collect::<AppResult<Vec<_>>>()?;
-            if let Err(error) = provider.configure(&agent_config(&connection, agent, model, &key)?)
+            if let Err(error) =
+                provider.configure(&agent_config(&connection, agent, model, &models, &key)?)
             {
                 for (path, bytes) in &originals {
                     match bytes {
@@ -848,6 +872,7 @@ impl ConnectionService {
                 agent_id: agent.into(),
                 connection_id: id.into(),
                 model: model.into(),
+                models: models.clone(),
                 group: if group.is_empty() {
                     None
                 } else {
@@ -996,7 +1021,9 @@ impl ConnectionService {
                 Ok((path, bytes))
             })
             .collect::<AppResult<Vec<_>>>()?;
-        if let Err(error) = provider.configure(&agent_config(&connection, agent, model, &key)?) {
+        if let Err(error) =
+            provider.configure(&agent_config(&connection, agent, model, &models, &key)?)
+        {
             for (path, bytes) in &originals {
                 match bytes {
                     Some(bytes) => {
@@ -1015,6 +1042,7 @@ impl ConnectionService {
             agent_id: agent.into(),
             connection_id: id.into(),
             model: model.into(),
+            models: models.clone(),
             group: None,
             token_id,
             status: "ready".into(),
@@ -1081,6 +1109,7 @@ impl ConnectionService {
             &connection,
             agent,
             &binding.model,
+            &binding.models,
             &key,
         )?)? {
             let mut damaged = binding;
@@ -1116,6 +1145,7 @@ fn agent_config(
     connection: &ConnectionSummary,
     agent: &str,
     model: &str,
+    models: &[String],
     key: &str,
 ) -> AppResult<AgentConfig> {
     if model.trim().is_empty() || model.len() > 256 || model.contains(['\r', '\n']) {
@@ -1132,6 +1162,7 @@ fn agent_config(
     Ok(AgentConfig {
         agent_id: agent.into(),
         model: model.into(),
+        models: models.to_vec(),
         base_url: base.into(),
         api_key: key.into(),
     })

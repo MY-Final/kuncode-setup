@@ -18,6 +18,7 @@ fn writes_three_tools_with_independent_sites_and_preserves_existing_settings() {
     let config = |id: &str, site: &str| AgentConfig {
         agent_id: id.into(),
         model: "model-with-\"quote".into(),
+        models: vec!["model-with-\"quote".into(), "second-model".into()],
         base_url: site.into(),
         api_key: format!("sk-test-{id}"),
     };
@@ -60,6 +61,18 @@ fn writes_three_tools_with_independent_sites_and_preserves_existing_settings() {
         opencode["provider"]["kuncode"]["options"]["apiKey"],
         "sk-test-opencode"
     );
+    // Multiple models: Codex gets profiles, OpenCode gets a model map.
+    assert_eq!(
+        code["profiles"]["kuncode-1"]["model"].as_str(),
+        Some("model-with-\"quote")
+    );
+    assert_eq!(
+        code["profiles"]["kuncode-2"]["model"].as_str(),
+        Some("second-model")
+    );
+    assert!(opencode["provider"]["kuncode"]["models"]
+        .get("second-model")
+        .is_some());
     std::fs::remove_dir_all(directory).unwrap();
 }
 

@@ -160,11 +160,43 @@ pub(super) fn write_configuration(dir: &std::path::Path, config: &AgentConfig) -
     provider.insert("wire_api".into(), "responses".into());
     provider.insert("requires_openai_auth".into(), true.into());
     providers.insert("kuncode".into(), toml::Value::Table(provider));
+
+    // Codex has no native multi-model list, so each extra model becomes a
+    // profile the user can select with `codex --profile <name>`.
+    let models = config.effective_models();
+    let profiles = table
+        .entry("profiles")
+        .or_insert_with(|| toml::Value::Table(Default::default()));
+    let profiles = profiles
+        .as_table_mut()
+        .ok_or_else(|| crate::error::AppError::Parse("Codex profiles 配置损坏".into()))?;
+    for (index, model) in models.iter().enumerate() {
+        let mut profile = toml::Table::new();
+        profile.insert("model".into(), model.clone().into());
+        profile.insert("model_provider".into(), "kuncode".into());
+        profiles.insert(
+            format!("kuncode-{}", index + 1),
+            toml::Value::Table(profile),
+        );
+    }
     let body = toml::to_string_pretty(&value)
         .map_err(|_| crate::error::AppError::Parse("无法生成 Codex 配置".into()))?;
     atomic_write(&path, &body)?;
-    atomic_write(
-        &dir.join("auth.json"),
-        &serde_json::to_string_pretty(&json!({ "OPENAI_API_KEY": config.api_key }))?,
-    )
+    merge_auth_key(&dir.join("auth.json"), &config.api_key)
+}
+
+/// Merges the API key into `auth.json` without dropping other keys, so an
+/// existing ChatGPT login (`tokens`) is preserved.
+fn merge_auth_key(path: &std::path::Path, api_key: &str) -> AppResult<()> {
+    let mut value: serde_json::Value = match std::fs::read_to_string(path) {
+        Ok(text) if !text.trim().is_empty() => {
+            serde_json::from_str(&text).unwrap_or_else(|_| json!({}))
+        }
+        _ => json!({}),
+    };
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| crate::error::AppError::Parse("auth.json 不是对象".into()))?;
+    object.insert("OPENAI_API_KEY".into(), json!(api_key));
+    atomic_write(path, &serde_json::to_string_pretty(&value)?)
 }

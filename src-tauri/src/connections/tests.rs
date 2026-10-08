@@ -87,13 +87,13 @@ fn claude_receives_root_and_other_tools_receive_v1() {
         verified: true,
     };
     assert_eq!(
-        agent_config(&connection, "claude", "model", "secret")
+        agent_config(&connection, "claude", "model", &[], "secret")
             .unwrap()
             .base_url,
         "https://test.example"
     );
     assert_eq!(
-        agent_config(&connection, "codex", "model", "secret")
+        agent_config(&connection, "codex", "model", &[], "secret")
             .unwrap()
             .base_url,
         "https://test.example/v1"
@@ -299,6 +299,7 @@ fn persisted_connections_restore_bindings_and_expiry_does_not_damage_tools() {
                 agent_id: "codex".into(),
                 connection_id: "connection-test".into(),
                 model: "coding-model".into(),
+                models: vec![],
                 group: None,
                 token_id: Some(7),
                 status: "ready".into(),
@@ -333,6 +334,7 @@ fn authorization_destination_survives_restart_without_rebinding_tools() {
                 agent_id: "codex".into(),
                 connection_id: "original-connection".into(),
                 model: "coding-model".into(),
+                models: vec![],
                 group: None,
                 token_id: Some(7),
                 status: "ready".into(),
@@ -485,6 +487,7 @@ fn manual_logout_removes_only_local_login_and_preserves_tool_credentials() {
             agent_id: "codex".into(),
             connection_id: connection.id.clone(),
             model: "coding-model".into(),
+            models: vec![],
             group: None,
             token_id: Some(7),
             status: "ready".into(),

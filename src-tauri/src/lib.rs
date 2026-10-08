@@ -183,9 +183,18 @@ async fn preview_connection_config(
     connection_id: String,
     agent_id: String,
     model: String,
+    models: Option<Vec<String>>,
 ) -> Result<agent::model::ConfigPreview, ErrorPayload> {
     let service = service.inner().clone();
-    blocking(move || service.preview(&connection_id, &agent_id, &model)).await
+    blocking(move || {
+        service.preview(
+            &connection_id,
+            &agent_id,
+            &model,
+            &models.unwrap_or_default(),
+        )
+    })
+    .await
 }
 
 #[tauri::command]
@@ -193,23 +202,11 @@ async fn apply_connection_config(
     service: State<'_, Arc<ConnectionService>>,
     connection_id: String,
     agent_id: String,
-    model: String,
-    token_id: Option<i64>,
-    group: Option<String>,
+    selection: connections::ApplySelection,
     progress: Channel<ConnectionStep>,
 ) -> Result<ConfigurationOutcome, ErrorPayload> {
     let service = service.inner().clone();
-    blocking(move || {
-        service.apply(
-            &connection_id,
-            &agent_id,
-            &model,
-            token_id,
-            group,
-            Some(&progress),
-        )
-    })
-    .await
+    blocking(move || service.apply(&connection_id, &agent_id, selection, Some(&progress))).await
 }
 
 #[tauri::command]

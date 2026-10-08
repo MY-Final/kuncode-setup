@@ -60,11 +60,22 @@ impl AgentProvider for ClaudeCodeProvider {
             } else {
                 None
             },
-            changes: vec![
-                "写入 ANTHROPIC_BASE_URL".to_string(),
-                "写入 ANTHROPIC_AUTH_TOKEN".to_string(),
-                format!("设置默认模型为 {}", config.model),
-            ],
+            changes: {
+                let mut changes = vec![
+                    "写入 ANTHROPIC_BASE_URL".to_string(),
+                    "写入 ANTHROPIC_AUTH_TOKEN".to_string(),
+                    format!("设置默认模型为 {}", config.model),
+                ];
+                // Claude Code 没有多模型列表配置；额外模型在会话内用 /model 切换。
+                let extra = config.effective_models();
+                if extra.len() > 1 {
+                    changes.push(format!(
+                        "可在会话内用 /model 切换到 {} 等模型",
+                        extra[1..].join("、")
+                    ));
+                }
+                changes
+            },
         })
     }
 
