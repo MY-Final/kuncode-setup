@@ -135,6 +135,20 @@ pnpm tauri build --debug --no-bundle
 
 退出 KunCode 会尝试撤销本应用的桌面授权；离线退出明确提示远端撤销未完成。断开手动连接只清理本机管理凭据，不撤销用户原有 Token。两种退出都保留工具配置和工具密钥，已配置的工具可继续启动。
 
+## 高级模型配置
+
+模型选择页、换绑弹窗和工具详情的「模型高级设置」均可编辑高级选项；留空使用工具默认值。设置随绑定持久化，保存前按完整批次备份，恢复备份会恢复对应参数。直接编辑模型设置使用本机已保存的工具凭据，不需要再次登录或创建密钥。
+
+- **OpenCode**：逐模型显示名称、图片输入、推理能力、上下文窗口与输出上限、思考程度，以及 JSON 格式的模型 SDK options 和 variants。上下文和输出上限须同时填写，图片输入应与模型的真实能力一致。
+- **Codex**：默认模型和各个 profile 的思考程度、上下文窗口；没有伪造图片能力或输出上限字段。
+- **Claude Code**：默认模型的思考程度、输出上限与旧式思考预算（0 为关闭，正值至少 1024）；图片能力和上下文由模型决定，自适应思考模型可能忽略固定预算。
+
+模型和服务端必须支持选定的思考档位；这些设置不会改变模型本身的能力。模型 SDK JSON 只允许非凭据参数。系统诊断按工具分别展示实际调用结果，与模型列表检查独立。
+
+思考程度支持多选，并可单独指定默认档位。OpenCode 将所选档位写入模型 variants；Codex 为各档位生成 profiles；Claude Code 保存档位选择并应用默认档位。
+
+配置字段参考：[OpenCode 配置 Schema](https://opencode.ai/config.json)、[Codex 配置参考](https://developers.openai.com/codex/config-reference/)、[Claude Code 模型配置](https://code.claude.com/docs/en/model-config)和[环境变量](https://code.claude.com/docs/en/env-vars)。
+
 ## Tauri Commands
 
 | Command                                         | 说明                                 |
@@ -149,6 +163,7 @@ pnpm tauri build --debug --no-bundle
 | `create_site_token` / `update_site_token`       | 创建或更新站点密钥                   |
 | `delete_site_token` / `reveal_site_token_key`   | 删除密钥或主动读取密钥以复制         |
 | `preview_connection_config`                     | 预览工具配置                         |
+| `update_tool_model_settings`                    | 备份并保存已有工具的高级模型参数     |
 | `apply_connection_config`                       | 备份并应用工具配置                   |
 | `tool_detail` / `check_tool_connection`         | 查看工具配置详情并检查当前绑定       |
 | `restore_tool_config` / `probe_tool_connection` | 恢复工具配置备份或探测服务连接       |
