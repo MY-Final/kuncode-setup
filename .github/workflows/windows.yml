@@ -1,0 +1,130 @@
+name: Windows CI and Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    name: Build Windows x64 installers
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+
+      - name: Set up pnpm from packageManager
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+
+      - name: Set up stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+          rustup target add x86_64-pc-windows-msvc
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          workspaces: src-tauri -> target
+          cache-on-failure: true
+
+      - name: Check release version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $packageVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tauriVersion = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $cargoVersion = [regex]::Match((Get-Content src-tauri/Cargo.toml -Raw), '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
+          if ($env:GITHUB_REF_NAME -ne "v$packageVersion" -or $tauriVersion -ne $packageVersion -or $cargoVersion -ne $packageVersion) {
+            throw "Release tag and package.json / tauri.conf.json / Cargo.toml versions must match"
+          }
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check formatting and types
+        run: |
+          pnpm format:check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo fmt --manifest-path src-tauri/Cargo.toml --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Check Rust warnings
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Build NSIS and MSI installers
+        run: pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis,msi -- --locked
+
+      - name: Collect installers and SHA256 checksums
+        shell: pwsh
+        run: |
+          $bundleRoot = "src-tauri/target/x86_64-pc-windows-msvc/release/bundle"
+          $installers = @(Get-ChildItem "$bundleRoot/nsis/*.exe", "$bundleRoot/msi/*.msi" -File)
+          if ($installers.Count -lt 2) { throw "Expected both EXE and MSI installers" }
+          New-Item -ItemType Directory -Path release-files -Force | Out-Null
+          $installers | Copy-Item -Destination release-files
+          $checksums = Get-ChildItem release-files -File | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          }
+          $checksums | Set-Content -LiteralPath release-files/SHA256SUMS.txt -Encoding ascii
+
+      - name: Upload Windows installers
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kuncode-setup-windows-x64
+          path: release-files/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish tagged release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows installers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: kuncode-setup-windows-x64
+          path: release-files
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          name: KunCode Setup ${{ github.ref_name }}
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
+          files: release-files/*
+          body: |
+            KunCode Setup Windows x64 安装包。
+
+            - `.exe`：常规安装，推荐大多数用户使用。
+            - `.msi`：Windows Installer 安装包。
+            - `SHA256SUMS.txt`：安装包 SHA256 校验值。
+
+            支持 Codex、Claude Code 和 OpenCode 的服务连接、密钥与模型配置、高级模型参数、备份恢复及系统诊断。

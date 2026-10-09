@@ -171,6 +171,14 @@ pnpm tauri build --debug --no-bundle
 | `launch_agent`                                  | 启动对应 CLI                         |
 | `test_tool_inference`                           | 主动测试默认模型实际调用及 Streaming |
 
+## GitHub 构建与发布
+
+[Windows CI and Release](https://github.com/MY-Final/kuncode-setup/actions/workflows/windows.yml) 在主分支提交、PR 和手动运行时构建 Windows x64 的 NSIS EXE、MSI 安装包及 SHA256 校验文件，结果保留在 Actions Artifacts 中 14 天。
+
+推送 `v<版本号>` 标签后，同一工作流会在构建成功后自动发布 [GitHub Release](https://github.com/MY-Final/kuncode-setup/releases)。标签必须与 `package.json`、`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 的版本一致。首次发布为 `v0.1.0`。含连字符的标签（如 `v0.2.0-beta.1`）会发布为预发布版本。
+
+工作流安装锁文件指定的依赖，执行格式、类型与 Clippy 检查，然后构建安装包；当前不运行自动化测试。发布所需权限由 GitHub 内置的 `GITHUB_TOKEN` 提供，无需额外配置发布 Token。
+
 ## 验证
 
 前端运行 `pnpm test`、`pnpm typecheck`、`pnpm build` 和 `pnpm format:check`。Rust 运行 `cargo test --manifest-path src-tauri/Cargo.toml` 与 `pnpm lint:rust`。
