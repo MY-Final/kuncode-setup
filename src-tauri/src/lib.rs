@@ -184,6 +184,7 @@ async fn preview_connection_config(
     agent_id: String,
     model: String,
     models: Option<Vec<String>>,
+    advanced: Option<agent::model::AdvancedConfig>,
 ) -> Result<agent::model::ConfigPreview, ErrorPayload> {
     let service = service.inner().clone();
     blocking(move || {
@@ -192,9 +193,20 @@ async fn preview_connection_config(
             &agent_id,
             &model,
             &models.unwrap_or_default(),
+            advanced,
         )
     })
     .await
+}
+
+#[tauri::command]
+async fn update_tool_model_settings(
+    service: State<'_, Arc<ConnectionService>>,
+    agent_id: String,
+    advanced: agent::model::AdvancedConfig,
+) -> Result<connections::ToolBinding, ErrorPayload> {
+    let service = service.inner().clone();
+    blocking(move || service.update_model_settings(&agent_id, advanced)).await
 }
 
 #[tauri::command]
@@ -313,6 +325,7 @@ pub fn run() {
             delete_site_token,
             preview_connection_config,
             apply_connection_config,
+            update_tool_model_settings,
             probe_tool_connection,
             test_tool_inference,
             check_tool_connection,

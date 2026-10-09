@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use tauri::ipc::Channel;
 use uuid::Uuid;
 
-use crate::agent::model::{AgentConfig, ConfigPreview, TestResult};
+use crate::agent::model::{AdvancedConfig, AgentConfig, ConfigPreview, TestResult};
 use crate::error::{AppError, AppResult};
 use http::{normalize_url, SiteClient, SiteConnection, KUNCODE_SITE};
 
@@ -92,6 +92,8 @@ pub struct ToolBinding {
     pub agent_id: String,
     pub connection_id: String,
     pub model: String,
+    #[serde(default)]
+    pub advanced: AdvancedConfig,
     #[serde(default)]
     pub models: Vec<String>,
     #[serde(default)]
@@ -192,6 +194,8 @@ struct SiteContext {
 #[serde(rename_all = "camelCase")]
 pub struct ApplySelection {
     pub model: String,
+    #[serde(default)]
+    pub advanced: Option<AdvancedConfig>,
     #[serde(default)]
     pub models: Vec<String>,
     #[serde(default)]
@@ -303,6 +307,8 @@ pub struct ToolDetail {
     pub site_url: String,
     pub base_url: String,
     pub model: String,
+    #[serde(default)]
+    pub advanced: AdvancedConfig,
     pub models: Vec<String>,
     pub group: Option<String>,
     pub token_id: Option<i64>,
@@ -831,10 +837,13 @@ impl ConnectionService {
         agent: &str,
         model: &str,
         models: &[String],
+        advanced: Option<AdvancedConfig>,
     ) -> AppResult<ConfigPreview> {
         let connection = self.connection(id)?;
         let provider = crate::agent::get(agent)?;
-        let config = agent_config(&connection, agent, model, models, "")?;
+        let mut config = agent_config(&connection, agent, model, models, "")?;
+        config.advanced = advanced.unwrap_or_default();
+        validate_advanced(&config)?;
         let mut preview = provider.preview(&config)?;
         preview.provider = reqwest::Url::parse(&connection.site_url)
             .unwrap()
@@ -842,6 +851,7 @@ impl ConnectionService {
             .unwrap_or("模型服务")
             .into();
         preview.masked_api_key = "确认后由程序安全获取".into();
+        preview.changes.extend(config.advanced.summary());
         Ok(preview)
     }
 
@@ -859,6 +869,8 @@ impl ConnectionService {
         let connection = self.connection(id)?;
         let provider = crate::agent::get(agent)?;
         let mut config = agent_config(&connection, agent, &selection.model, &selection.models, "")?;
+        config.advanced = selection.advanced.clone().unwrap_or_default();
+        validate_advanced(&config)?;
         if !connection.connected
             || connection
                 .expires_at
@@ -929,6 +941,7 @@ impl ConnectionService {
                 agent_id: agent.into(),
                 connection_id: id.into(),
                 model: config.model.clone(),
+                advanced: config.advanced.clone(),
                 models: config.effective_models(),
                 group: selection.group.filter(|group| !group.is_empty()),
                 token_id,
@@ -1195,7 +1208,8 @@ impl ConnectionService {
         let connection = self.connection(&binding.connection_id)?;
         let provider = crate::agent::get(agent)?;
         let key = vault::get(&connection.tool_reference(agent)).unwrap_or_default();
-        let config = agent_config(&connection, agent, &binding.model, &binding.models, &key)?;
+        let mut config = agent_config(&connection, agent, &binding.model, &binding.models, &key)?;
+        config.advanced = binding.advanced.clone();
         let config_files = provider
             .configuration_paths()
             .into_iter()
@@ -1229,6 +1243,7 @@ impl ConnectionService {
             site_url: connection.site_url.clone(),
             base_url: config.base_url.clone(),
             model: binding.model.clone(),
+            advanced: binding.advanced.clone(),
             models: if binding.models.is_empty() {
                 vec![binding.model.clone()]
             } else {
@@ -1246,6 +1261,53 @@ impl ConnectionService {
                 .collect(),
             config_files,
         })
+    }
+
+    /// Change model metadata using the same local transaction and grouped backup.
+    pub fn update_model_settings(
+        &self,
+        agent: &str,
+        advanced: AdvancedConfig,
+    ) -> AppResult<ToolBinding> {
+        let provider = crate::agent::get(agent)?;
+        self.update_model_settings_for(provider.as_ref(), advanced)
+    }
+
+    fn update_model_settings_for(
+        &self,
+        provider: &dyn crate::agent::provider::AgentProvider,
+        advanced: AdvancedConfig,
+    ) -> AppResult<ToolBinding> {
+        let agent = provider.id();
+        let _operation = self
+            .operation
+            .try_lock()
+            .map_err(|_| AppError::Other("另一个配置正在进行，请稍后再试".into()))?;
+        let mut binding = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Other("连接状态暂不可用".into()))?
+            .bindings
+            .get(agent)
+            .cloned()
+            .ok_or_else(|| AppError::Auth("请先配置此工具".into()))?;
+        let connection = self.connection(&binding.connection_id)?;
+        let key = vault::get(&connection.tool_reference(agent))?;
+        let mut config = agent_config(&connection, agent, &binding.model, &binding.models, &key)?;
+        config.advanced = advanced;
+        validate_advanced(&config)?;
+        provider.validate_existing()?;
+        binding.advanced = config.advanced.clone();
+        binding.inference_verified = false;
+        self.commit_configuration(
+            provider,
+            &config,
+            &connection,
+            binding.clone(),
+            false,
+            &mut |_| {},
+        )?;
+        Ok(binding)
     }
 
     /// 读取某个站点密钥的明文，仅供前端一次性复制到剪贴板。
@@ -1354,7 +1416,8 @@ impl ConnectionService {
                 return Err(error);
             }
         };
-        let config = agent_config(&connection, agent, &binding.model, &binding.models, &key)?;
+        let mut config = agent_config(&connection, agent, &binding.model, &binding.models, &key)?;
+        config.advanced = binding.advanced.clone();
         if !crate::agent::get(agent)?.configuration_matches(&config)? {
             binding.status = "error".into();
             binding.verified = false;
@@ -1521,6 +1584,7 @@ fn agent_config(
         &connection.api_base_url
     };
     Ok(AgentConfig {
+        advanced: AdvancedConfig::default(),
         agent_id: agent.into(),
         model: model.into(),
         models: models.to_vec(),
@@ -1588,4 +1652,13 @@ fn quota_from_status(status: &Value, profile: &Value) -> Value {
         "used": convert(used),
         "quota_per_unit": per_unit,
     })
+}
+
+fn validate_advanced(config: &AgentConfig) -> AppResult<()> {
+    let selected = if config.agent_id == "claude" {
+        vec![config.model.clone()]
+    } else {
+        config.effective_models()
+    };
+    config.advanced.validate(&config.agent_id, &selected)
 }

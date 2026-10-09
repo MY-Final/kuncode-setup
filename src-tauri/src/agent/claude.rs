@@ -109,7 +109,49 @@ impl AgentProvider for ClaudeCodeProvider {
             && value
                 .pointer("/env/ANTHROPIC_MODEL")
                 .and_then(serde_json::Value::as_str)
-                == Some(&config.model))
+                == Some(&config.model)
+            && (!config.advanced.models.contains_key(&config.model)
+                || (value
+                    .pointer("/env/CLAUDE_CODE_EFFORT_LEVEL")
+                    .and_then(serde_json::Value::as_str)
+                    == config
+                        .advanced
+                        .models
+                        .get(&config.model)
+                        .and_then(|s| s.reasoning_effort.as_deref())
+                    && value.get("effortLevel").and_then(serde_json::Value::as_str)
+                        == config
+                            .advanced
+                            .models
+                            .get(&config.model)
+                            .and_then(|s| s.reasoning_effort.as_deref())
+                    && [
+                        (
+                            "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+                            config
+                                .advanced
+                                .models
+                                .get(&config.model)
+                                .and_then(|s| s.max_output_tokens),
+                        ),
+                        (
+                            "MAX_THINKING_TOKENS",
+                            config
+                                .advanced
+                                .models
+                                .get(&config.model)
+                                .and_then(|s| s.thinking_budget),
+                        ),
+                    ]
+                    .iter()
+                    .all(|(key, limit)| {
+                        value
+                            .get("env")
+                            .and_then(|env| env.get(key))
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                            == limit.map(|v| v.to_string())
+                    }))))
     }
 
     fn launch(&self) -> AppResult<String> {
@@ -131,6 +173,27 @@ pub(super) fn write_configuration(path: &std::path::Path, config: &AgentConfig) 
         ));
     }
     let env = env.as_object_mut().unwrap();
+    config
+        .advanced
+        .validate("claude", std::slice::from_ref(&config.model))?;
+    let settings = config.advanced.models.get(&config.model);
+    for (key, limit) in [
+        (
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+            settings.and_then(|s| s.max_output_tokens),
+        ),
+        (
+            "MAX_THINKING_TOKENS",
+            settings.and_then(|s| s.thinking_budget),
+        ),
+    ] {
+        if settings.is_some() {
+            env.remove(key);
+        }
+        if let Some(limit) = limit {
+            env.insert(key.into(), serde_json::json!(limit.to_string()));
+        }
+    }
     env.insert(
         "ANTHROPIC_BASE_URL".into(),
         serde_json::json!(config.base_url),
@@ -140,6 +203,19 @@ pub(super) fn write_configuration(path: &std::path::Path, config: &AgentConfig) 
         serde_json::json!(config.api_key),
     );
     env.insert("ANTHROPIC_MODEL".into(), serde_json::json!(config.model));
+    let env = obj.get_mut("env").unwrap().as_object_mut().unwrap();
+    if settings.is_some() {
+        env.remove("CLAUDE_CODE_EFFORT_LEVEL");
+    }
+    if let Some(effort) = settings.and_then(|s| s.reasoning_effort.as_ref()) {
+        env.insert("CLAUDE_CODE_EFFORT_LEVEL".into(), serde_json::json!(effort));
+    }
+    if settings.is_some() {
+        obj.remove("effortLevel");
+    }
+    if let Some(effort) = settings.and_then(|s| s.reasoning_effort.as_ref()) {
+        obj.insert("effortLevel".into(), serde_json::json!(effort));
+    }
 
     atomic_write(path, &serde_json::to_string_pretty(&value)?)
 }

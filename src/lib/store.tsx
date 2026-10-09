@@ -20,6 +20,9 @@ import type {
 
 export interface ToolConfiguration {
   model: string;
+  models?: string[];
+  advanced?: import("@/lib/types").AdvancedConfig;
+  inferenceVerified?: boolean;
   demo: boolean;
   status: "ready" | "error";
   connectionId?: string;
@@ -137,6 +140,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     Object.values(snapshot.bindings).forEach((binding) => {
       current[binding.agentId] = {
         model: binding.model,
+        models: binding.models,
+        advanced: binding.advanced,
+        inferenceVerified: binding.inferenceVerified,
         demo: false,
         status: binding.status,
         connectionId: binding.connectionId,

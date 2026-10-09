@@ -18,6 +18,7 @@ import type {
   SiteToken,
   SiteGroup,
   ToolDetail,
+  ToolBinding,
 } from "@/lib/types";
 
 /**
@@ -194,6 +195,7 @@ export async function previewConnection(
   agentId: string,
   model: string,
   models: string[] = [],
+  advanced?: import("@/lib/types").AdvancedConfig,
 ): Promise<ConfigPreview> {
   requireDesktop();
   return invoke("preview_connection_config", {
@@ -201,6 +203,7 @@ export async function previewConnection(
     agentId,
     model,
     models,
+    advanced,
   });
 }
 export async function applyConnection(
@@ -212,6 +215,7 @@ export async function applyConnection(
   group?: string,
   models: string[] = [],
   rebuild = false,
+  advanced?: import("@/lib/types").AdvancedConfig,
 ): Promise<ConfigurationOutcome> {
   requireDesktop();
   const progress = new Channel<ConnectionStep>();
@@ -225,9 +229,18 @@ export async function applyConnection(
       tokenId: tokenId ?? null,
       group: group ?? null,
       rebuild,
+      advanced,
     },
     progress,
   });
+}
+
+export async function updateToolModelSettings(
+  agentId: string,
+  advanced: import("@/lib/types").AdvancedConfig,
+): Promise<ToolBinding> {
+  requireDesktop();
+  return invoke("update_tool_model_settings", { agentId, advanced });
 }
 export async function checkToolConnection(
   agentId: string,

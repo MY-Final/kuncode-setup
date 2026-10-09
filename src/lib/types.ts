@@ -32,6 +32,23 @@ export interface AgentConfig {
   model: string;
   baseUrl: string;
   apiKey: string;
+  advanced?: AdvancedConfig;
+}
+
+export interface ModelSettings {
+  name?: string | null;
+  imageInput?: boolean | null;
+  reasoning?: boolean | null;
+  contextWindow?: number | null;
+  maxOutputTokens?: number | null;
+  reasoningEffort?: string | null;
+  reasoningEfforts?: string[];
+  thinkingBudget?: number | null;
+  options?: Record<string, unknown> | null;
+  variants?: Record<string, Record<string, unknown>> | null;
+}
+export interface AdvancedConfig {
+  models: Record<string, ModelSettings>;
 }
 
 /** 与 Rust 端 ConfigPreview 对应 */
@@ -87,6 +104,7 @@ export interface ToolBinding {
   agentId: string;
   connectionId: string;
   model: string;
+  advanced?: AdvancedConfig;
   models?: string[];
   group?: string | null;
   tokenId: number | null;
@@ -176,6 +194,7 @@ export interface ToolDetail {
   siteUrl: string;
   baseUrl: string;
   model: string;
+  advanced?: AdvancedConfig;
   models: string[];
   group: string | null;
   tokenId: number | null;

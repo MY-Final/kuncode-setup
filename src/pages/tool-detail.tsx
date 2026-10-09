@@ -9,12 +9,14 @@ import {
   Loader2,
   RefreshCw,
   RotateCcw,
+  SlidersHorizontal,
   Wrench,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/page-header";
 import { AgentIcon } from "@/components/agent-icon";
 import { Button } from "@/components/ui/button";
+import { ModelSettingsDialog } from "@/components/model-settings-dialog";
 import { RebindDialog } from "@/components/rebind-dialog";
 import { useApp } from "@/lib/store";
 import * as api from "@/lib/tauri/api";
@@ -31,6 +33,7 @@ export default function ToolDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [rebind, setRebind] = useState<AgentMeta | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const [editingModels, setEditingModels] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -161,6 +164,10 @@ export default function ToolDetailPage() {
               )}
             </dl>
             <div className="tool-detail-actions">
+              <Button variant="outline" onClick={() => setEditingModels(true)}>
+                <SlidersHorizontal />
+                模型高级设置
+              </Button>
               <Button onClick={() => setRebind(agent)}>
                 <Wrench />
                 换模型 / 换绑密钥
@@ -186,6 +193,16 @@ export default function ToolDetailPage() {
               </Button>
             </div>
           </section>
+          {editingModels && (
+            <ModelSettingsDialog
+              detail={detail}
+              onClose={() => setEditingModels(false)}
+              onDone={async () => {
+                await refreshConnections();
+                await load();
+              }}
+            />
+          )}
           <section className="tool-detail-files" aria-label="配置文件">
             <h2>
               <FileText aria-hidden="true" />

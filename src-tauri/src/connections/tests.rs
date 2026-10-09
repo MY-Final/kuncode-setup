@@ -300,6 +300,7 @@ fn persisted_connections_restore_bindings_and_expiry_does_not_damage_tools() {
         state.bindings.insert(
             "codex".into(),
             ToolBinding {
+                advanced: Default::default(),
                 agent_id: "codex".into(),
                 connection_id: "connection-test".into(),
                 model: "coding-model".into(),
@@ -336,6 +337,7 @@ fn authorization_destination_survives_restart_without_rebinding_tools() {
         state.bindings.insert(
             "codex".into(),
             ToolBinding {
+                advanced: Default::default(),
                 agent_id: "codex".into(),
                 connection_id: "original-connection".into(),
                 model: "coding-model".into(),
@@ -494,6 +496,7 @@ fn manual_logout_removes_only_local_login_and_preserves_tool_credentials() {
     vault::put(&tool_reference, "test-tool-secret").unwrap();
     service
         .record_binding(ToolBinding {
+            advanced: Default::default(),
             agent_id: "codex".into(),
             connection_id: connection.id.clone(),
             model: "coding-model".into(),
@@ -722,7 +725,7 @@ fn actual_inference_uses_tool_protocol_and_bounded_streaming_request() {
             socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{stream}", stream.len()).as_bytes()).unwrap();
             String::from_utf8(request).unwrap()
         });
-        let config = AgentConfig { agent_id: agent.into(), model: "test-model".into(), models: vec![], base_url: if agent == "claude" { base } else { format!("{base}/v1") }, api_key: "test-secret".into() };
+        let config = AgentConfig { advanced: Default::default(), agent_id: agent.into(), model: "test-model".into(), models: vec![], base_url: if agent == "claude" { base } else { format!("{base}/v1") }, api_key: "test-secret".into() };
         SiteClient::new().unwrap().test_streaming(&config).unwrap();
         let request = server.join().unwrap();
         assert!(request.starts_with(&format!("POST {endpoint} HTTP/1.1")));
@@ -763,6 +766,7 @@ fn automatic_manual_key_preparation_survives_restart_without_recreating_or_rebin
         .store_connection(connection.clone(), "management-test-secret")
         .unwrap();
     let selection = ApplySelection {
+        advanced: None,
         model: "test-model".into(),
         models: vec![],
         token_id: None,

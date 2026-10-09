@@ -113,7 +113,25 @@ impl AgentProvider for CodexProvider {
                 && auth
                     .get("OPENAI_API_KEY")
                     .and_then(serde_json::Value::as_str)
-                    == Some(&config.api_key),
+                    == Some(&config.api_key)
+                && model_settings_match(&value, config.advanced.models.get(&config.model))
+                && config
+                    .effective_models()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, model)| config.advanced.models.contains_key(*model))
+                    .all(|(index, model)| {
+                        value
+                            .get("profiles")
+                            .and_then(|profiles| profiles.get(format!("kuncode-{}", index + 1)))
+                            .is_some_and(|profile| {
+                                profile.get("model").and_then(toml::Value::as_str) == Some(model)
+                                    && model_settings_match(
+                                        profile,
+                                        config.advanced.models.get(model),
+                                    )
+                            })
+                    }),
         )
     }
 
@@ -129,6 +147,10 @@ pub(super) fn write_configuration(dir: &std::path::Path, config: &AgentConfig) -
     let table = value
         .as_table_mut()
         .ok_or_else(|| crate::error::AppError::Parse("Codex 配置不是对象".into()))?;
+    config
+        .advanced
+        .validate("codex", &config.effective_models())?;
+    write_model_settings(table, config.advanced.models.get(&config.model));
     table.insert("model".into(), config.model.clone().into());
     table.insert("model_provider".into(), "kuncode".into());
     let providers = table
@@ -153,15 +175,43 @@ pub(super) fn write_configuration(dir: &std::path::Path, config: &AgentConfig) -
     let profiles = profiles
         .as_table_mut()
         .ok_or_else(|| crate::error::AppError::Parse("Codex profiles 配置损坏".into()))?;
+    let previous_profiles = profiles.clone();
     profiles.retain(|name, _| {
-        !name
-            .strip_prefix("kuncode-")
-            .is_some_and(|suffix| suffix.parse::<usize>().is_ok())
+        !name.strip_prefix("kuncode-").is_some_and(|suffix| {
+            suffix.parse::<usize>().is_ok()
+                || suffix.split_once('-').is_some_and(|(index, effort)| {
+                    index.parse::<usize>().is_ok()
+                        && [
+                            "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+                        ]
+                        .contains(&effort)
+                })
+        })
     });
     for (index, model) in models.iter().enumerate() {
-        let mut profile = toml::Table::new();
+        let mut profile = previous_profiles
+            .values()
+            .find(|profile| {
+                profile.get("model").and_then(toml::Value::as_str) == Some(model)
+                    && profile.get("model_provider").and_then(toml::Value::as_str)
+                        == Some("kuncode")
+            })
+            .and_then(toml::Value::as_table)
+            .cloned()
+            .unwrap_or_default();
         profile.insert("model".into(), model.clone().into());
         profile.insert("model_provider".into(), "kuncode".into());
+        write_model_settings(&mut profile, config.advanced.models.get(model));
+        if let Some(settings) = config.advanced.models.get(model) {
+            for effort in &settings.reasoning_efforts {
+                let mut variant = profile.clone();
+                variant.insert("model_reasoning_effort".into(), effort.clone().into());
+                profiles.insert(
+                    format!("kuncode-{}-{effort}", index + 1),
+                    toml::Value::Table(variant),
+                );
+            }
+        }
         profiles.insert(
             format!("kuncode-{}", index + 1),
             toml::Value::Table(profile),
@@ -179,4 +229,36 @@ pub(super) fn write_configuration(dir: &std::path::Path, config: &AgentConfig) -
         &dir.join("auth.json"),
         &serde_json::to_string_pretty(&auth)?,
     )
+}
+
+fn write_model_settings(table: &mut toml::Table, settings: Option<&super::model::ModelSettings>) {
+    let Some(settings) = settings else {
+        return;
+    };
+    for field in ["model_reasoning_effort", "model_context_window"] {
+        table.remove(field);
+    }
+    if let Some(effort) = &settings.reasoning_effort {
+        table.insert("model_reasoning_effort".into(), effort.clone().into());
+    }
+    if let Some(context) = settings.context_window {
+        table.insert("model_context_window".into(), (context as i64).into());
+    }
+}
+
+fn model_settings_match(
+    value: &toml::Value,
+    settings: Option<&super::model::ModelSettings>,
+) -> bool {
+    if settings.is_none() {
+        return true;
+    }
+    value
+        .get("model_reasoning_effort")
+        .and_then(toml::Value::as_str)
+        == settings.and_then(|s| s.reasoning_effort.as_deref())
+        && value
+            .get("model_context_window")
+            .and_then(toml::Value::as_integer)
+            == settings.and_then(|s| s.context_window.map(|v| v as i64))
 }

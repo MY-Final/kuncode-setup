@@ -350,7 +350,10 @@ mod tests {
             Err(AppError::Other("unused".into()))
         }
         fn configure(&self, config: &AgentConfig) -> AppResult<()> {
-            config::atomic_write(&self.paths[0], &json!({"model": config.model}).to_string())?;
+            config::atomic_write(
+                &self.paths[0],
+                &json!({"model": config.model, "advanced": config.advanced}).to_string(),
+            )?;
             if self.fail_after_write {
                 return Err(AppError::Io("injected second-file failure".into()));
             }
@@ -418,6 +421,7 @@ mod tests {
     ) -> AppResult<()> {
         let config = agent_config(connection, provider.id(), model, &[], key)?;
         let binding = ToolBinding {
+            advanced: Default::default(),
             agent_id: provider.id().into(),
             connection_id: connection.id.clone(),
             model: model.into(),
@@ -645,6 +649,48 @@ mod tests {
             "{ malformed original"
         );
         assert!(!provider.paths[1].exists());
+        std::fs::remove_dir_all(service.directory).unwrap();
+    }
+
+    #[test]
+    fn editing_advanced_settings_is_local_persists_and_restores_as_one_batch() {
+        use crate::agent::model::{AdvancedConfig, ModelSettings};
+        let _lock = crate::connections::tests::keyring_lock();
+        let (service, provider, connection) = scene();
+        commit(&service, &provider, &connection, "model", "old-secret").unwrap();
+        let advanced = AdvancedConfig {
+            models: [(
+                "model".into(),
+                ModelSettings {
+                    reasoning_effort: Some("high".into()),
+                    context_window: Some(200000),
+                    ..Default::default()
+                },
+            )]
+            .into(),
+        };
+        let binding = service
+            .update_model_settings_for(&provider, advanced.clone())
+            .unwrap();
+        assert!(binding.advanced == advanced);
+        assert_eq!(binding.token_id, Some(7));
+        assert_eq!(
+            vault::get(&connection.tool_reference("codex")).unwrap(),
+            "old-secret"
+        );
+        let file: Value =
+            serde_json::from_slice(&std::fs::read(&provider.paths[0]).unwrap()).unwrap();
+        assert_eq!(
+            file["advanced"]["models"]["model"]["reasoningEffort"],
+            "high"
+        );
+        let restarted = ConnectionService::new(service.directory.clone()).unwrap();
+        assert!(restarted.snapshot().unwrap().bindings["codex"].advanced == advanced);
+        restarted.restore_configuration(&provider).unwrap();
+        assert!(
+            restarted.snapshot().unwrap().bindings["codex"].advanced == AdvancedConfig::default()
+        );
+        restarted.restore_configuration(&provider).unwrap();
         std::fs::remove_dir_all(service.directory).unwrap();
     }
 }

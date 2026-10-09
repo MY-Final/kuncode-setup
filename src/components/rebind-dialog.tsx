@@ -17,9 +17,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  ModelAdvancedSettings,
+  selectedAdvanced,
+  validateAdvanced,
+} from "@/components/model-advanced-settings";
 import { useApp } from "@/lib/store";
 import * as api from "@/lib/tauri/api";
-import type { AgentMeta, SiteGroup, SiteToken } from "@/lib/types";
+import type {
+  AdvancedConfig,
+  AgentMeta,
+  SiteGroup,
+  SiteToken,
+} from "@/lib/types";
 import { cn, errorMessage } from "@/lib/utils";
 
 /**
@@ -44,6 +54,8 @@ export function RebindDialog({
   const [group, setGroup] = useState("");
   const [models, setModels] = useState<string[]>([]);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const [advanced, setAdvanced] = useState<AdvancedConfig>({ models: {} });
+  const [advancedValid, setAdvancedValid] = useState(true);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pinging, setPinging] = useState(false);
@@ -56,7 +68,16 @@ export function RebindDialog({
     setTokenId(config?.tokenId ?? null);
     setGroup(config?.group ?? "");
     setModels([]);
-    setSelectedModels([]);
+    setSelectedModels(
+      config?.model
+        ? [
+            config.model,
+            ...(config.models ?? []).filter((model) => model !== config.model),
+          ]
+        : [],
+    );
+    setAdvanced(config?.advanced ?? { models: {} });
+    setAdvancedValid(true);
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent?.id]);
@@ -164,10 +185,15 @@ export function RebindDialog({
   }
 
   async function submit() {
-    if (!agent || busy || !tokenId || !defaultModel) return;
+    if (!agent || busy || !advancedValid || !tokenId || !defaultModel) return;
     setBusy(true);
     setError(null);
     try {
+      const selectedSettings = selectedAdvanced(
+        advanced,
+        agent.id === "claude" ? [defaultModel] : selectedModels,
+      );
+      validateAdvanced(selectedSettings, agent.id);
       const outcome = await api.applyConnection(
         connectionId,
         agent.id,
@@ -176,6 +202,8 @@ export function RebindDialog({
         tokenId,
         group || undefined,
         selectedModels,
+        false,
+        selectedSettings,
       );
       await refreshConnections();
       if (outcome.binding.status !== "ready") {
@@ -202,7 +230,7 @@ export function RebindDialog({
 
   return (
     <Dialog open={!!agent} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="rebind-dialog">
         <DialogHeader>
           <DialogTitle>换绑 {agent?.name} 的密钥</DialogTitle>
           <DialogDescription>
@@ -317,6 +345,17 @@ export function RebindDialog({
             })}
           </div>
         </div>
+        {agent && (
+          <ModelAdvancedSettings
+            key={agent.id}
+            agentId={agent.id}
+            models={selectedModels}
+            defaultModel={defaultModel}
+            value={advanced}
+            onChange={setAdvanced}
+            onValidityChange={setAdvancedValid}
+          />
+        )}
         {error && (
           <p className="inline-error" role="alert">
             {error}
@@ -332,7 +371,7 @@ export function RebindDialog({
           </Button>
           <Button
             onClick={() => void submit()}
-            disabled={busy || !tokenId || !defaultModel}
+            disabled={busy || !advancedValid || !tokenId || !defaultModel}
           >
             {busy && <Loader2 className="animate-spin" />}换绑密钥
           </Button>

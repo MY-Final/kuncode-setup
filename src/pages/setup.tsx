@@ -4,6 +4,11 @@ import { ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { SetupStepper } from "@/components/setup/stepper";
 import { ConfigurationPreview } from "@/components/setup/config-preview";
+import {
+  ModelAdvancedSettings,
+  selectedAdvanced,
+  validateAdvanced,
+} from "@/components/model-advanced-settings";
 import { ConnectionDialog } from "@/components/connection-dialog";
 import {
   OperationDialog,
@@ -32,6 +37,7 @@ import { useApp } from "@/lib/store";
 import * as api from "@/lib/tauri/api";
 import { DEMO_MODELS, DEFAULT_BASE_URL } from "@/lib/data/models";
 import type {
+  AdvancedConfig,
   ConfigPreview,
   ConnectionStep,
   SiteGroup,
@@ -71,6 +77,10 @@ export default function SetupPage() {
   const [model, setModel] = useState(config?.model ?? "");
   const [models, setModels] = useState<string[]>([]);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const [advanced, setAdvanced] = useState<AdvancedConfig>(
+    config?.advanced ?? { models: {} },
+  );
+  const [advancedValid, setAdvancedValid] = useState(true);
   const [tokens, setTokens] = useState<SiteToken[]>([]);
   const [groups, setGroups] = useState<SiteGroup[]>([]);
   const [tokenId, setTokenId] = useState<number | null>(
@@ -90,6 +100,13 @@ export default function SetupPage() {
   const [canRebuild, setCanRebuild] = useState(false);
   const [rebuildOpen, setRebuildOpen] = useState(false);
   const applying = useRef(false);
+  const initializedAdvanced = useRef<string | null>(null);
+  useEffect(() => {
+    if (config && initializedAdvanced.current !== agentId) {
+      initializedAdvanced.current = agentId;
+      setAdvanced(config.advanced ?? { models: {} });
+    }
+  }, [agentId, config]);
   const navigate = useNavigate();
   const selected = connections.find(
     (connection) => connection.id === connectionId,
@@ -210,6 +227,11 @@ export default function SetupPage() {
     setBusy(true);
     setError(null);
     try {
+      const selectedSettings = selectedAdvanced(
+        advanced,
+        agentId === "claude" ? [model.trim()] : effectiveModels,
+      );
+      validateAdvanced(selectedSettings, agentId);
       const result = demo
         ? await api.previewConfig(
             {
@@ -225,6 +247,7 @@ export default function SetupPage() {
             agentId,
             model.trim(),
             effectiveModels,
+            selectedSettings,
           );
       setPreview(
         automaticKey
@@ -301,6 +324,10 @@ export default function SetupPage() {
           group || undefined,
           effectiveModels,
           rebuild,
+          selectedAdvanced(
+            advanced,
+            agentId === "claude" ? [model.trim()] : effectiveModels,
+          ),
         );
         await refreshConnections();
         const success = outcome.binding.status === "ready";
@@ -699,6 +726,17 @@ export default function SetupPage() {
                 />
               </div>
             )}
+            {!demo && (
+              <ModelAdvancedSettings
+                key={agentId}
+                agentId={agentId}
+                models={effectiveModels}
+                defaultModel={model}
+                value={advanced}
+                onChange={setAdvanced}
+                onValidityChange={setAdvancedValid}
+              />
+            )}
             {modelNotice && (
               <p className="page-footnote" role="status">
                 {modelNotice}
@@ -724,6 +762,7 @@ export default function SetupPage() {
                 disabled={
                   busy ||
                   modelLoading ||
+                  !advancedValid ||
                   !model.trim() ||
                   (!demo && !manualModel && !models.includes(model)) ||
                   (!demo && effectiveModels.length === 0)

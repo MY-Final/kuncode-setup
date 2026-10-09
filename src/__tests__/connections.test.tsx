@@ -142,6 +142,7 @@ beforeEach(() => {
         connectionId: args.connectionId,
         model: args.selection.model,
         models: args.selection.models,
+        advanced: args.selection.advanced,
         tokenId: 7,
         status: "ready" as const,
         verified: true,
@@ -1071,4 +1072,147 @@ it("未登录时账户面板提供登录入口", async () => {
   expect(
     screen.getByRole("button", { name: "登录 KunCode" }),
   ).toBeInTheDocument();
+});
+
+it("OpenCode 高级配置经过预览和确认完整传给后端，JSON 错误阻止继续", async () => {
+  snapshot.connections.push(other);
+  render(
+    <AppProvider>
+      <MemoryRouter initialEntries={["/setup/opencode"]}>
+        <Routes>
+          <Route path="/setup/:agent" element={<SetupPage />} />
+        </Routes>
+      </MemoryRouter>
+    </AppProvider>,
+  );
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("radio", { name: /other.example/ }));
+  await user.click(screen.getByRole("button", { name: "使用此连接" }));
+  await screen.findByRole("checkbox", { name: "server-model" });
+  await user.click(screen.getByText("高级模型配置"));
+  await user.click(screen.getByRole("combobox", { name: "图片输入" }));
+  await user.click(await screen.findByRole("option", { name: "支持" }));
+  await user.click(screen.getByRole("button", { name: "思考程度（可多选）" }));
+  await user.click(
+    await screen.findByRole("menuitemcheckbox", { name: "high" }),
+  );
+  await user.keyboard("{Escape}");
+  await user.click(screen.getByRole("combobox", { name: "默认思考程度" }));
+  await user.click(await screen.findByRole("option", { name: "high" }));
+  await user.type(
+    screen.getByRole("spinbutton", { name: "上下文窗口（Token）" }),
+    "1048576",
+  );
+  await user.type(
+    screen.getByRole("spinbutton", { name: "输出上限（Token）" }),
+    "131072",
+  );
+  await user.click(screen.getByText("SDK 选项与思考变体（JSON）"));
+  const options = screen.getByRole("textbox", { name: "模型 SDK 选项" });
+  await user.click(options);
+  await user.paste('{"thinking":');
+  expect(screen.getByRole("button", { name: "下一步" })).toBeDisabled();
+  await user.clear(options);
+  await user.paste('{"thinking":{"type":"enabled","budgetTokens":8192}}');
+  await user.click(screen.getByRole("button", { name: "下一步" }));
+  await screen.findByText("确认配置");
+  const advanced = {
+    models: {
+      "server-model": expect.objectContaining({
+        imageInput: true,
+        reasoningEffort: "high",
+        contextWindow: 1048576,
+        maxOutputTokens: 131072,
+        options: { thinking: { type: "enabled", budgetTokens: 8192 } },
+      }),
+    },
+  };
+  expect(native.invoke).toHaveBeenCalledWith(
+    "preview_connection_config",
+    expect.objectContaining({ advanced }),
+  );
+  await user.click(screen.getByRole("button", { name: "配置 OpenCode" }));
+  await screen.findByRole("heading", { name: "OpenCode 配置完成" });
+  expect(native.invoke).toHaveBeenCalledWith(
+    "apply_connection_config",
+    expect.objectContaining({
+      selection: expect.objectContaining({ advanced }),
+    }),
+  );
+});
+
+it("已有工具可直接编辑高级模型配置，无需重新登录或创建密钥", async () => {
+  snapshot.connections.push(other);
+  snapshot.bindings.opencode = {
+    agentId: "opencode",
+    connectionId: other.id,
+    model: "server-model",
+    models: ["server-model", "second-model"],
+    tokenId: null,
+    status: "ready",
+    verified: true,
+    advanced: {
+      models: {
+        "server-model": {
+          imageInput: true,
+          contextWindow: 200000,
+          maxOutputTokens: 16000,
+        },
+      },
+    },
+  };
+  const base = native.invoke.getMockImplementation()!;
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === "tool_detail")
+      return {
+        ...(await base(command, args)),
+        advanced: snapshot.bindings.opencode.advanced,
+      };
+    if (command === "update_tool_model_settings") {
+      snapshot.bindings.opencode.advanced = args.advanced;
+      return structuredClone(snapshot.bindings.opencode);
+    }
+    return base(command, args);
+  });
+  render(
+    <AppProvider>
+      <MemoryRouter initialEntries={["/tools/opencode"]}>
+        <Routes>
+          <Route path="/tools/:agent" element={<ToolDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    </AppProvider>,
+  );
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "模型高级设置" }));
+  const dialog = within(screen.getByRole("dialog"));
+  const context = dialog.getAllByRole("spinbutton", {
+    name: "上下文窗口（Token）",
+  })[0];
+  expect(context).toHaveValue(200000);
+  await user.clear(context);
+  await user.type(context, "400000");
+  await user.click(dialog.getByRole("button", { name: "保存模型设置" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+  );
+  expect(native.invoke).toHaveBeenCalledWith("update_tool_model_settings", {
+    agentId: "opencode",
+    advanced: {
+      models: {
+        "server-model": {
+          imageInput: true,
+          contextWindow: 400000,
+          maxOutputTokens: 16000,
+        },
+      },
+    },
+  });
+  expect(
+    native.invoke.mock.calls.some(([command]) =>
+      ["start_login", "create_site_token", "apply_connection_config"].includes(
+        command,
+      ),
+    ),
+  ).toBe(false);
 });

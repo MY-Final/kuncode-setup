@@ -97,7 +97,19 @@ impl AgentProvider for OpenCodeProvider {
             && value
                 .pointer("/provider/kuncode/options/apiKey")
                 .and_then(serde_json::Value::as_str)
-                == Some(&config.api_key))
+                == Some(&config.api_key)
+            && config.effective_models().iter().all(|model| {
+                value
+                    .pointer("/provider/kuncode/models")
+                    .and_then(|models| models.get(model))
+                    .is_some_and(|actual| {
+                        if config.advanced.models.contains_key(model) {
+                            actual == &model_definition(config, model)
+                        } else {
+                            actual.is_object()
+                        }
+                    })
+            }))
     }
 
     fn launch(&self) -> AppResult<String> {
@@ -125,10 +137,26 @@ pub(super) fn write_configuration(path: &std::path::Path, config: &AgentConfig) 
             "opencode.json 的 provider 必须是对象，原文件未修改".into(),
         ));
     }
+    config
+        .advanced
+        .validate("opencode", &config.effective_models())?;
     let models: serde_json::Map<String, serde_json::Value> = config
         .effective_models()
         .into_iter()
-        .map(|model| (model.clone(), serde_json::json!({ "name": model })))
+        .map(|model| {
+            let definition = if config.advanced.models.contains_key(&model) {
+                model_definition(config, &model)
+            } else {
+                providers
+                    .get("kuncode")
+                    .and_then(|provider| provider.get("models"))
+                    .and_then(|models| models.get(&model))
+                    .filter(|value| value.is_object())
+                    .cloned()
+                    .unwrap_or_else(|| model_definition(config, &model))
+            };
+            (model, definition)
+        })
         .collect();
     providers.as_object_mut().unwrap().insert(
         "kuncode".into(),
@@ -144,4 +172,53 @@ pub(super) fn write_configuration(path: &std::path::Path, config: &AgentConfig) 
     );
 
     atomic_write(path, &serde_json::to_string_pretty(&value)?)
+}
+
+pub(super) fn model_definition(config: &AgentConfig, model: &str) -> serde_json::Value {
+    let mut value = serde_json::json!({"name": model});
+    if let Some(settings) = config.advanced.models.get(model) {
+        let obj = value.as_object_mut().unwrap();
+        if let Some(name) = &settings.name {
+            obj.insert("name".into(), serde_json::json!(name));
+        }
+        if let Some(image) = settings.image_input {
+            let input = if image {
+                vec!["text", "image"]
+            } else {
+                vec!["text"]
+            };
+            obj.insert(
+                "modalities".into(),
+                serde_json::json!({"input": input, "output": ["text"]}),
+            );
+            obj.insert("attachment".into(), serde_json::json!(image));
+        }
+        if let Some(reasoning) = settings.reasoning {
+            obj.insert("reasoning".into(), serde_json::json!(reasoning));
+        }
+        if let (Some(context), Some(output)) = (settings.context_window, settings.max_output_tokens)
+        {
+            obj.insert(
+                "limit".into(),
+                serde_json::json!({"context": context, "output": output}),
+            );
+        }
+        let mut options = settings.options.clone().unwrap_or_default();
+        if let Some(effort) = &settings.reasoning_effort {
+            options.insert("reasoningEffort".into(), serde_json::json!(effort));
+        }
+        if !options.is_empty() {
+            obj.insert("options".into(), serde_json::Value::Object(options));
+        }
+        let mut variants = settings.variants.clone().unwrap_or_default();
+        for effort in &settings.reasoning_efforts {
+            let variant = variants.entry(effort.clone()).or_default();
+            variant.insert("reasoningEffort".into(), serde_json::json!(effort));
+            variant.insert("disabled".into(), serde_json::json!(false));
+        }
+        if !variants.is_empty() {
+            obj.insert("variants".into(), serde_json::json!(variants));
+        }
+    }
+    value
 }

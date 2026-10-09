@@ -1,6 +1,203 @@
 use super::model::AgentConfig;
 
 #[test]
+fn advanced_models_write_native_capabilities_limits_and_reasoning_and_reset_cleanly() {
+    use super::model::{AdvancedConfig, ModelSettings};
+    let dir = std::env::temp_dir().join(format!("kuncode-advanced-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut config = AgentConfig {
+        agent_id: "opencode".into(), model: "vision-model".into(), models: vec!["vision-model".into(), "text-model".into()],
+        advanced: AdvancedConfig { models: [
+            ("vision-model".into(), ModelSettings { name: Some("视觉模型".into()), image_input: Some(true), reasoning: Some(true), context_window: Some(1048576), max_output_tokens: Some(131072), reasoning_effort: Some("high".into()), options: Some(serde_json::from_value(serde_json::json!({"thinking":{"type":"enabled","budgetTokens":8192}})).unwrap()), variants: Some(serde_json::from_value(serde_json::json!({"fast":{"reasoningEffort":"low"}})).unwrap()), ..Default::default() }),
+            ("text-model".into(), ModelSettings { image_input: Some(false), ..Default::default() }),
+        ].into() }, base_url: "https://test.example/v1".into(), api_key: "test-secret".into(),
+    };
+    let path = dir.join("opencode.json");
+    super::opencode::write_configuration(&path, &config).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let vision = &value["provider"]["kuncode"]["models"]["vision-model"];
+    assert_eq!(vision["name"], "视觉模型");
+    assert_eq!(
+        vision["modalities"]["input"],
+        serde_json::json!(["text", "image"])
+    );
+    assert_eq!(vision["reasoning"], true);
+    assert_eq!(
+        vision["limit"],
+        serde_json::json!({"context":1048576,"output":131072})
+    );
+    assert_eq!(vision["options"]["reasoningEffort"], "high");
+    assert_eq!(vision["options"]["thinking"]["budgetTokens"], 8192);
+    assert_eq!(vision["variants"]["fast"]["reasoningEffort"], "low");
+    assert_eq!(
+        value["provider"]["kuncode"]["models"]["text-model"]["modalities"]["input"],
+        serde_json::json!(["text"])
+    );
+
+    config.advanced = Default::default();
+    super::opencode::write_configuration(&path, &config).unwrap();
+    let preserved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        preserved["provider"]["kuncode"]["models"]["vision-model"],
+        *vision
+    );
+    config.agent_id = "codex".into();
+    config.advanced.models = [
+        (
+            "vision-model".into(),
+            ModelSettings {
+                reasoning_effort: Some("high".into()),
+                context_window: Some(200000),
+                ..Default::default()
+            },
+        ),
+        (
+            "text-model".into(),
+            ModelSettings {
+                reasoning_effort: Some("low".into()),
+                ..Default::default()
+            },
+        ),
+    ]
+    .into();
+    super::codex::write_configuration(&dir, &config).unwrap();
+    let value: toml::Value =
+        toml::from_str(&std::fs::read_to_string(dir.join("config.toml")).unwrap()).unwrap();
+    assert_eq!(value["model_reasoning_effort"].as_str(), Some("high"));
+    assert_eq!(value["model_context_window"].as_integer(), Some(200000));
+    assert_eq!(
+        value["profiles"]["kuncode-2"]["model_reasoning_effort"].as_str(),
+        Some("low")
+    );
+    config.advanced = Default::default();
+    super::codex::write_configuration(&dir, &config).unwrap();
+    let preserved: toml::Value =
+        toml::from_str(&std::fs::read_to_string(dir.join("config.toml")).unwrap()).unwrap();
+    assert_eq!(preserved["model_reasoning_effort"].as_str(), Some("high"));
+    assert_eq!(
+        preserved["profiles"]["kuncode-2"]["model_reasoning_effort"].as_str(),
+        Some("low")
+    );
+    config
+        .advanced
+        .models
+        .insert(config.model.clone(), ModelSettings::default());
+    super::codex::write_configuration(&dir, &config).unwrap();
+    let value: toml::Value =
+        toml::from_str(&std::fs::read_to_string(dir.join("config.toml")).unwrap()).unwrap();
+    assert!(value.get("model_reasoning_effort").is_none());
+    assert!(value.get("model_context_window").is_none());
+
+    config.agent_id = "claude".into();
+    config.advanced.models.insert(
+        config.model.clone(),
+        ModelSettings {
+            reasoning_effort: Some("high".into()),
+            max_output_tokens: Some(16384),
+            thinking_budget: Some(8192),
+            ..Default::default()
+        },
+    );
+    let path = dir.join("settings.json");
+    super::claude::write_configuration(&path, &config).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(value["effortLevel"], "high");
+    assert_eq!(value["env"]["CLAUDE_CODE_EFFORT_LEVEL"], "high");
+    assert_eq!(value["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"], "16384");
+    assert_eq!(value["env"]["MAX_THINKING_TOKENS"], "8192");
+    config.advanced = Default::default();
+    super::claude::write_configuration(&path, &config).unwrap();
+    let preserved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(preserved["effortLevel"], "high");
+    config
+        .advanced
+        .models
+        .insert(config.model.clone(), ModelSettings::default());
+    super::claude::write_configuration(&path, &config).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(value.get("effortLevel").is_none());
+    assert!(value["env"].get("MAX_THINKING_TOKENS").is_none());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rejects_invalid_advanced_limits_cross_tool_fields_and_secret_metadata() {
+    use super::model::{AdvancedConfig, ModelSettings};
+    let selected = vec!["model".into()];
+    let validate = |agent, settings| {
+        AdvancedConfig {
+            models: [("model".into(), settings)].into(),
+        }
+        .validate(agent, &selected)
+    };
+    assert!(validate(
+        "opencode",
+        ModelSettings {
+            context_window: Some(100),
+            ..Default::default()
+        }
+    )
+    .is_err());
+    assert!(validate(
+        "opencode",
+        ModelSettings {
+            context_window: Some(100),
+            max_output_tokens: Some(101),
+            ..Default::default()
+        }
+    )
+    .is_err());
+    assert!(validate(
+        "codex",
+        ModelSettings {
+            image_input: Some(true),
+            ..Default::default()
+        }
+    )
+    .is_err());
+    assert!(validate(
+        "claude",
+        ModelSettings {
+            thinking_budget: Some(512),
+            ..Default::default()
+        }
+    )
+    .is_err());
+    assert!(validate(
+        "claude",
+        ModelSettings {
+            thinking_budget: Some(0),
+            ..Default::default()
+        }
+    )
+    .is_ok());
+    assert!(validate(
+        "opencode",
+        ModelSettings {
+            options: Some(
+                serde_json::from_value(serde_json::json!({"nested":{"apiKey":"secret"}})).unwrap()
+            ),
+            ..Default::default()
+        }
+    )
+    .is_err());
+    assert!(validate(
+        "codex",
+        ModelSettings {
+            reasoning_effort: Some("invalid".into()),
+            ..Default::default()
+        }
+    )
+    .is_err());
+    assert!(serde_json::from_value::<AdvancedConfig>(
+        serde_json::json!({"models":{"model":{"contextWindow":1.5}}})
+    )
+    .is_err());
+}
+
+#[test]
 fn writes_three_tools_with_independent_sites_and_preserves_existing_settings() {
     let directory =
         std::env::temp_dir().join(format!("kuncode-adapters-test-{}", uuid::Uuid::new_v4()));
@@ -16,6 +213,7 @@ fn writes_three_tools_with_independent_sites_and_preserves_existing_settings() {
     std::fs::write(&claude, "{\"permissions\":{\"allow\":[\"Read\"]}}").unwrap();
     std::fs::write(&opencode, "{\"theme\":\"system\"}").unwrap();
     let config = |id: &str, site: &str| AgentConfig {
+        advanced: Default::default(),
         agent_id: id.into(),
         model: "model-with-\"quote".into(),
         models: vec!["model-with-\"quote".into(), "second-model".into()],
@@ -105,6 +303,7 @@ fn malformed_existing_configs_are_not_overwritten_including_codex_auth() {
     let dir = std::env::temp_dir().join(format!("kuncode-parse-test-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let config = AgentConfig {
+        advanced: Default::default(),
         agent_id: "codex".into(),
         model: "model".into(),
         models: vec![],
