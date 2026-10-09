@@ -74,7 +74,7 @@ export function Sidebar() {
           {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
           <span className="sidebar-label">折叠侧栏</span>
         </Button>
-        <span className="sidebar-version">v0.1.0</span>
+        <span className="sidebar-version">v0.1.1</span>
       </div>
     </aside>
   );
