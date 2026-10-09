@@ -65,7 +65,7 @@ export function useAgentLaunch() {
         // 启动前一致性校验：本机配置 + 站点密钥。
         const check = await api.checkToolConnection(agent.id);
         if (!check.ok) {
-          if (check.reason === "network") {
+          if (check.reason === "network" || check.reason === "unverified") {
             // 网络不可用不阻断启动：配置本身没有问题。
             warning = `${check.message}。继续打开已配置的工具。`;
           } else {

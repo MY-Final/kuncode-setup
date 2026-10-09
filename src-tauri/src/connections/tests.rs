@@ -676,6 +676,64 @@ fn a_readable_model_list_must_contain_every_selected_model() {
 }
 
 #[test]
+fn streaming_requires_text_and_protocol_completion_and_rejects_in_band_errors() {
+    let streams = [
+        ("codex", "data: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"),
+        ("claude", "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"OK\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n"),
+        ("opencode", "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\ndata: [DONE]\n\n"),
+    ];
+    for (agent, stream) in streams {
+        assert!(http::validate_stream(agent, stream.as_bytes()).is_ok());
+        assert!(http::validate_stream(agent, stream.replace('\n', "\r\n").as_bytes()).is_ok());
+        let first = stream.split("\n\n").next().unwrap();
+        assert!(http::validate_stream(agent, first.as_bytes()).is_err());
+        let error = format!("{first}\n\ndata: {{\"error\":{{\"message\":\"server-secret\"}}}}\n\n");
+        let result = http::validate_stream(agent, error.as_bytes()).unwrap_err();
+        assert!(!result.to_string().contains("server-secret"));
+        assert!(http::validate_stream(agent, b"data: [DONE]\n\n").is_err());
+    }
+}
+
+#[test]
+fn actual_inference_uses_tool_protocol_and_bounded_streaming_request() {
+    use std::io::{Read, Write};
+    for (agent, endpoint, stream) in [
+        ("codex", "/v1/responses", "data: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"),
+        ("claude", "/v1/messages", "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"OK\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n"),
+        ("opencode", "/v1/chat/completions", "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\ndata: [DONE]\n\n"),
+    ] {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 4096];
+            loop {
+                let n = socket.read(&mut buffer).unwrap();
+                assert!(n > 0);
+                request.extend_from_slice(&buffer[..n]);
+                if let Some(split) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&request[..split]);
+                    let size: usize = headers.lines().find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse().unwrap())).unwrap();
+                    if request.len() >= split + 4 + size { break; }
+                }
+            }
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{stream}", stream.len()).as_bytes()).unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        let config = AgentConfig { agent_id: agent.into(), model: "test-model".into(), models: vec![], base_url: if agent == "claude" { base } else { format!("{base}/v1") }, api_key: "test-secret".into() };
+        SiteClient::new().unwrap().test_streaming(&config).unwrap();
+        let request = server.join().unwrap();
+        assert!(request.starts_with(&format!("POST {endpoint} HTTP/1.1")));
+        let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["model"], "test-model");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body.get("max_tokens").or_else(|| body.get("max_output_tokens")).unwrap(), 64);
+    }
+}
+
+#[test]
 fn automatic_manual_key_preparation_survives_restart_without_recreating_or_rebinding() {
     let _lock = keyring_lock();
     let (site, server) = serve(vec![

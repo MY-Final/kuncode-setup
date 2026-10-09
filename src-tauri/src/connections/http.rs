@@ -43,6 +43,82 @@ impl SiteClient {
         Ok(Self { client })
     }
 
+    /// Explicit, bounded diagnostic using the protocol written for this tool.
+    /// Response text and server error bodies are never returned to the UI.
+    pub fn test_streaming(&self, config: &crate::agent::model::AgentConfig) -> AppResult<()> {
+        let prompt = "Reply with OK only.";
+        let (endpoint, body) = match config.agent_id.as_str() {
+            "codex" => (
+                "responses",
+                json!({"model": config.model, "input": prompt, "stream": true, "max_output_tokens": 64}),
+            ),
+            "claude" => (
+                "v1/messages",
+                json!({"model": config.model, "messages": [{"role": "user", "content": prompt}], "stream": true, "max_tokens": 64}),
+            ),
+            "opencode" => (
+                "chat/completions",
+                json!({"model": config.model, "messages": [{"role": "user", "content": prompt}], "stream": true, "max_tokens": 64}),
+            ),
+            _ => return Err(AppError::Unsupported("此工具尚未支持实际调用测试".into())),
+        };
+        let mut authorization = HeaderValue::from_str(&format!("Bearer {}", config.api_key))
+            .map_err(|_| AppError::Auth("密钥格式不正确".into()))?;
+        authorization.set_sensitive(true);
+        let mut request = self
+            .client
+            .post(format!(
+                "{}/{endpoint}",
+                config.base_url.trim_end_matches('/')
+            ))
+            .header(AUTHORIZATION, authorization)
+            .header("Accept", "text/event-stream")
+            .json(&body);
+        if config.agent_id == "claude" {
+            request = request.header("anthropic-version", "2023-06-01");
+        }
+        let response = request
+            .send()
+            .map_err(|_| AppError::Other("实际调用未完成，请检查网络后重试".into()))?;
+        match response.status().as_u16() {
+            200..=299 => {}
+            401 | 403 => {
+                return Err(AppError::Auth(
+                    "实际调用被拒绝，请检查密钥及模型权限".into(),
+                ))
+            }
+            404 | 405 => {
+                return Err(AppError::Unsupported(
+                    "工具所需的模型接口不可用，请检查服务协议和模型".into(),
+                ))
+            }
+            status => {
+                return Err(AppError::Other(format!(
+                    "实际调用失败（HTTP {status}），请检查额度、模型及服务状态"
+                )))
+            }
+        }
+        if !response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.to_ascii_lowercase().starts_with("text/event-stream"))
+        {
+            return Err(AppError::Unsupported(
+                "服务未返回 Streaming 响应，实际调用测试未通过".into(),
+            ));
+        }
+        let mut bytes = Vec::new();
+        response
+            .take(256 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| AppError::Other("Streaming 响应中断或超时，请重试".into()))?;
+        if bytes.len() > 256 * 1024 {
+            return Err(AppError::Other("测试响应超出限制，已停止读取".into()));
+        }
+        validate_stream(&config.agent_id, &bytes)
+    }
+
     pub fn request(
         &self,
         method: reqwest::Method,
@@ -517,6 +593,77 @@ impl SiteClient {
             })?;
         model_key(key)
     }
+}
+
+pub(super) fn validate_stream(agent: &str, bytes: &[u8]) -> AppResult<()> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| AppError::Unsupported("Streaming 编码不兼容".into()))?
+        .replace("\r\n", "\n");
+    let mut content = false;
+    let mut complete = false;
+    for frame in text.split("\n\n") {
+        let data = frame
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:").map(str::trim_start))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if data.is_empty() {
+            continue;
+        }
+        if complete {
+            return Err(AppError::Other(
+                "Streaming 结束后仍有数据，测试未通过".into(),
+            ));
+        }
+        if data == "[DONE]" && agent == "opencode" {
+            complete = true;
+            continue;
+        }
+        let value: Value = serde_json::from_str(&data)
+            .map_err(|_| AppError::Unsupported("Streaming 数据格式不兼容".into()))?;
+        let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
+        if value.get("error").is_some()
+            || matches!(kind, "error" | "response.failed" | "response.incomplete")
+        {
+            return Err(AppError::Other(
+                "服务在 Streaming 中返回错误或未完成响应，请检查模型和额度".into(),
+            ));
+        }
+        match agent {
+            "codex" => {
+                content |= kind == "response.output_text.delta"
+                    && value
+                        .get("delta")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| !text.is_empty());
+                complete |= kind == "response.completed"
+                    && value.pointer("/response/status").and_then(Value::as_str)
+                        == Some("completed");
+            }
+            "claude" => {
+                content |= kind == "content_block_delta"
+                    && value.pointer("/delta/type").and_then(Value::as_str) == Some("text_delta")
+                    && value
+                        .pointer("/delta/text")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| !text.is_empty());
+                complete |= kind == "message_stop";
+            }
+            "opencode" => {
+                content |= value
+                    .pointer("/choices/0/delta/content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !text.is_empty());
+            }
+            _ => return Err(AppError::Unsupported("未知工具协议".into())),
+        }
+    }
+    if !content || !complete {
+        return Err(AppError::Other(
+            "未收到完整的模型文本和 Streaming 结束事件，测试未通过".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Request context for site-level key management. `desktop` selects the

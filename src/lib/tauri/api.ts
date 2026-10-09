@@ -211,6 +211,7 @@ export async function applyConnection(
   tokenId?: number,
   group?: string,
   models: string[] = [],
+  rebuild = false,
 ): Promise<ConfigurationOutcome> {
   requireDesktop();
   const progress = new Channel<ConnectionStep>();
@@ -223,6 +224,7 @@ export async function applyConnection(
       models,
       tokenId: tokenId ?? null,
       group: group ?? null,
+      rebuild,
     },
     progress,
   });
@@ -276,4 +278,9 @@ export async function probeToolConnection(
 ): Promise<TestResult> {
   requireDesktop();
   return invoke("probe_tool_connection", { agentId });
+}
+
+export async function testToolInference(agentId: string): Promise<TestResult> {
+  requireDesktop();
+  return invoke("test_tool_inference", { agentId });
 }

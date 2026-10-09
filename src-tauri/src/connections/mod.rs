@@ -1321,10 +1321,14 @@ impl ConnectionService {
     }
 
     pub fn probe_binding(&self, agent: &str) -> AppResult<TestResult> {
-        self.probe_binding_mode(agent)
+        self.probe_binding_mode(agent, false)
     }
 
-    fn probe_binding_mode(&self, agent: &str) -> AppResult<TestResult> {
+    pub fn test_inference(&self, agent: &str) -> AppResult<TestResult> {
+        self.probe_binding_mode(agent, true)
+    }
+
+    fn probe_binding_mode(&self, agent: &str, inference: bool) -> AppResult<TestResult> {
         let _operation = self
             .operation
             .try_lock()
@@ -1359,7 +1363,9 @@ impl ConnectionService {
             return Err(AppError::Parse("工具配置已变化或损坏，请修复配置".into()));
         }
         let started = Instant::now();
-        let result =
+        let result = if inference {
+            SiteClient::new()?.test_streaming(&config).map(|_| ())
+        } else {
             match SiteClient::new()?.models(&connection.api_base_url, &key, None, false, None) {
                 Ok(available) => verify_selected_models(&available, &config.effective_models()),
                 Err(AppError::Unsupported(_)) => {
@@ -1374,24 +1380,36 @@ impl ConnectionService {
                     });
                 }
                 Err(error) => Err(error),
-            };
+            }
+        };
         match result {
             Ok(()) => {
                 binding.status = "ready".into();
-                binding.verified = true;
+                if inference {
+                    binding.inference_verified = true;
+                } else {
+                    binding.verified = true;
+                }
                 self.record_binding(binding)?;
                 Ok(TestResult {
                     ok: true,
                     latency_ms: Some(started.elapsed().as_millis() as u64),
-                    message: "所选模型列表检查已通过；实际推理和 Streaming 尚未验证".into(),
+                    message: if inference {
+                        "默认模型实际调用及 Streaming 已通过"
+                    } else {
+                        "所选模型列表检查已通过；实际推理和 Streaming 尚未验证"
+                    }
+                    .into(),
                 })
             }
             Err(error) => {
                 binding.verified = false;
-                if matches!(
-                    error,
-                    AppError::Auth(_) | AppError::Permission(_) | AppError::Unsupported(_)
-                ) {
+                if inference
+                    || matches!(
+                        error,
+                        AppError::Auth(_) | AppError::Permission(_) | AppError::Unsupported(_)
+                    )
+                {
                     binding.inference_verified = false;
                 }
                 if matches!(

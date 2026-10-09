@@ -21,7 +21,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useApp } from "@/lib/store";
-import { isTauri, probeToolConnection, testConnection } from "@/lib/tauri/api";
+import {
+  isTauri,
+  probeToolConnection,
+  testConnection,
+  testToolInference,
+} from "@/lib/tauri/api";
 import { installGuideFor, type InstallGuide } from "@/lib/data/install";
 import type { TestResult } from "@/lib/types";
 import { cn, errorMessage } from "@/lib/utils";
@@ -37,6 +42,7 @@ export default function DiagnosePage() {
   } = useApp();
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<TestResult | null>(null);
+  const [inferenceAgent, setInferenceAgent] = useState<string | null>(null);
   const [guide, setGuide] = useState<{
     name: string;
     guide: InstallGuide;
@@ -55,10 +61,20 @@ export default function DiagnosePage() {
     setResult(null);
     try {
       if (isTauri()) {
-        const checks = await Promise.allSettled(
-          configured.map((id) => probeToolConnection(id)),
+        const checks: PromiseSettledResult<TestResult>[] = [];
+        for (const id of configured) {
+          try {
+            checks.push({
+              status: "fulfilled",
+              value: await probeToolConnection(id),
+            });
+          } catch (reason) {
+            checks.push({ status: "rejected", reason });
+          }
+        }
+        const failures = checks.filter(
+          (value) => value.status === "rejected" || !value.value.ok,
         );
-        const failures = checks.filter((value) => value.status === "rejected");
         setResult({
           ok: !failures.length,
           latencyMs: null,
@@ -194,7 +210,7 @@ export default function DiagnosePage() {
             <PlugZap />
           </span>
           <div className="diagnostic-copy">
-            <h3>KunCode API</h3>
+            <h3>模型服务</h3>
           </div>
           <span
             className={cn(
@@ -223,10 +239,31 @@ export default function DiagnosePage() {
             disabled={testing || (isTauri() && !configured.length)}
           >
             {testing && <RefreshCw className="animate-spin" />}
-            {isTauri() ? "检查连接" : "演示检查"}
+            {isTauri() ? "检查模型列表" : "演示检查"}
           </Button>
         </div>
       </section>
+      {isTauri() && configured.length > 0 && (
+        <section className="connection-section" aria-label="实际调用测试">
+          <h2>测试实际调用</h2>
+          <p className="page-footnote">
+            向所选工具的默认模型发送一次短请求，验证实际调用和
+            Streaming；会消耗少量额度。
+          </p>
+          <div className="connection-entry">
+            {configured.map((id) => (
+              <Button
+                key={id}
+                variant="outline"
+                disabled={testing}
+                onClick={() => setInferenceAgent(id)}
+              >
+                测试 {agents.find((agent) => agent.id === id)?.name ?? id}
+              </Button>
+            ))}
+          </div>
+        </section>
+      )}
       {result && (
         <p className="page-footnote" role="status">
           {result.message}
@@ -235,6 +272,49 @@ export default function DiagnosePage() {
       {isTauri() && !configured.length && (
         <p className="page-footnote">请先完成工具配置，再检查服务连接。</p>
       )}
+      <Dialog
+        open={inferenceAgent !== null}
+        onOpenChange={(open) => {
+          if (!open) setInferenceAgent(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>测试实际调用与 Streaming</DialogTitle>
+            <DialogDescription>
+              向默认模型发送一次短请求，会消耗少量额度。模型响应内容不会保存。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="setup-form-footer">
+            <Button variant="outline" onClick={() => setInferenceAgent(null)}>
+              取消
+            </Button>
+            <Button
+              onClick={async () => {
+                if (!inferenceAgent || testing) return;
+                const id = inferenceAgent;
+                setInferenceAgent(null);
+                setTesting(true);
+                setResult(null);
+                try {
+                  setResult(await testToolInference(id));
+                } catch (value) {
+                  setResult({
+                    ok: false,
+                    latencyMs: null,
+                    message: errorMessage(value),
+                  });
+                } finally {
+                  await refreshConnections().catch(() => undefined);
+                  setTesting(false);
+                }
+              }}
+            >
+              开始测试
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={guide !== null}
         onOpenChange={(open) => {

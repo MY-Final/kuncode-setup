@@ -280,6 +280,15 @@ async fn launch_agent(agent_id: String) -> Result<String, ErrorPayload> {
     blocking(move || agent::get(&agent_id)?.launch()).await
 }
 
+#[tauri::command]
+async fn test_tool_inference(
+    service: State<'_, Arc<ConnectionService>>,
+    agent_id: String,
+) -> Result<agent::model::TestResult, ErrorPayload> {
+    let service = service.inner().clone();
+    blocking(move || service.test_inference(&agent_id)).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -305,6 +314,7 @@ pub fn run() {
             preview_connection_config,
             apply_connection_config,
             probe_tool_connection,
+            test_tool_inference,
             check_tool_connection,
             restore_tool_config,
             rename_connection,

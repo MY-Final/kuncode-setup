@@ -92,6 +92,7 @@ export interface ToolBinding {
   tokenId: number | null;
   status: "ready" | "error";
   verified: boolean;
+  inferenceVerified?: boolean;
 }
 
 /** 站点密钥（token），与 Rust 端 http::SiteToken 对应。列表永远只返回掩码。 */
@@ -149,7 +150,7 @@ export interface ConfigurationOutcome {
 export interface BindingCheck {
   agentId: string;
   ok: boolean;
-  reason: "ok" | "config" | "key" | "network";
+  reason: "ok" | "config" | "key" | "model" | "network" | "unverified";
   needsRebind: boolean;
   message: string;
 }
@@ -158,6 +159,7 @@ export interface RestoreOutcome {
   agentId: string;
   restored: string[];
   missing: string[];
+  removed: string[];
 }
 /** 与 Rust 端 ConfigFileView 对应：脱敏后的配置文件视图 */
 export interface ConfigFileView {
@@ -179,6 +181,7 @@ export interface ToolDetail {
   tokenId: number | null;
   status: string;
   verified: boolean;
+  inferenceVerified?: boolean;
   configPaths: string[];
   configFiles: ConfigFileView[];
 }
