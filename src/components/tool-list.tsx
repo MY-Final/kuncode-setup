@@ -109,17 +109,11 @@ export function ToolList({ management = false }: { management?: boolean }) {
                       <span className="state-separator">·</span>
                     </>
                   )}
-                  {failed
-                    ? "配置异常"
-                    : ready
-                      ? config.demo
-                        ? "演示已配置"
-                        : "已配置"
-                      : "尚未配置"}
+                  {failed ? "配置异常" : ready ? "已配置" : "尚未配置"}
                 </span>
               </div>
               <div className="tool-actions">
-                {ready && !config.demo && (
+                {ready && (
                   <Button
                     variant="ghost"
                     size="sm"
@@ -137,7 +131,7 @@ export function ToolList({ management = false }: { management?: boolean }) {
                     重新配置
                   </Button>
                 )}
-                {ready && !config.demo && (
+                {ready && (
                   <Button
                     variant="ghost"
                     size="sm"
@@ -146,7 +140,7 @@ export function ToolList({ management = false }: { management?: boolean }) {
                     换绑密钥
                   </Button>
                 )}
-                {management && ready && !config.demo && (
+                {management && ready && (
                   <Button
                     variant="ghost"
                     size="sm"

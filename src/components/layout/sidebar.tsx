@@ -14,7 +14,7 @@ const nav = [
   { to: "/", label: "首页", icon: House },
   { to: "/models", label: "工具配置", icon: Wrench },
   { to: "/keys", label: "密钥与分组", icon: KeyRound },
-  { to: "/diagnose", label: "系统诊断", icon: Activity },
+  { to: "/diagnose", label: "系统诊断", icon: Activity, subtle: true },
   { to: "/settings", label: "设置", icon: Settings },
 ];
 export function Brand() {
@@ -48,6 +48,7 @@ export function Sidebar() {
             className={({ isActive }) =>
               cn(
                 "nav-item",
+                "subtle" in item && item.subtle && "nav-item-subtle",
                 (isActive ||
                   (item.to === "/models" && pathname.startsWith("/setup/"))) &&
                   "active",

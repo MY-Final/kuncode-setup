@@ -147,7 +147,7 @@ export function Dashboard() {
       <article className="dashboard-card">
         <div className="dashboard-card-head">
           <Wrench aria-hidden="true" />
-          <span>工具状态</span>
+          <span>工具配置</span>
           <Button variant="ghost" size="sm" onClick={() => navigate("/models")}>
             管理
             <ArrowRight aria-hidden="true" />
@@ -156,11 +156,7 @@ export function Dashboard() {
         <strong className="dashboard-value">
           {configured} / {agents.length}
         </strong>
-        <span className="dashboard-sub">
-          {configured === agents.length && agents.length > 0
-            ? "全部工具已配置，可直接启动。"
-            : "还有工具尚未配置。"}
-        </span>
+        <span className="dashboard-sub">{configured} 个工具已配置</span>
       </article>
     </section>
   );

@@ -351,7 +351,7 @@ it("真实配置使用服务器模型，预览不创建密钥，确认后才写�
   ]);
 });
 
-it("首页 Dashboard 展示账户余额与工具状态", async () => {
+it("首页 Dashboard 展示账户余额与工具配置进度", async () => {
   snapshot.connections.push(official);
   snapshot.currentOfficial = official.id;
   snapshot.bindings.codex = {
@@ -371,8 +371,9 @@ it("首页 Dashboard 展示账户余额与工具状态", async () => {
   );
   expect(await screen.findByText("账户余额")).toBeInTheDocument();
   expect(await screen.findByText("$12.50")).toBeInTheDocument();
-  expect(screen.getByText("工具状态")).toBeInTheDocument();
+  expect(screen.getByText("工具配置")).toBeInTheDocument();
   expect(screen.getByText("1 / 3")).toBeInTheDocument();
+  expect(screen.getByText("1 个工具已配置")).toBeInTheDocument();
 });
 
 it("首页对低额度账户给出预警", async () => {

@@ -9,7 +9,7 @@ export default function HomePage() {
       </header>
       <Dashboard />
       <section className="home-tools" aria-labelledby="tools-heading">
-        <h2 id="tools-heading">我的 Coding Tools</h2>
+        <h2 id="tools-heading">Coding Tools</h2>
         <ToolList />
       </section>
     </div>

@@ -272,6 +272,17 @@
 .nav-item.active > svg {
   stroke-width: 1.9;
 }
+.nav-item-subtle {
+  color: color-mix(in oklab, var(--sidebar-foreground) 74%, transparent);
+}
+.nav-item-subtle > svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.45;
+}
+.nav-item-subtle.active {
+  color: var(--sidebar-accent-foreground);
+}
 .sidebar-footer {
   margin-top: auto;
   padding-bottom: 20px;
