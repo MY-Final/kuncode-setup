@@ -1231,7 +1231,10 @@ impl ConnectionService {
             .into_iter()
             .map(|path| {
                 let exists = path.exists();
-                let content = if exists {
+                let content = if exists && path.file_name().is_some_and(|name| name == "auth.json")
+                {
+                    Some("凭据文件已存在；API Key 和已有登录信息均已隐藏".into())
+                } else if exists {
                     std::fs::read_to_string(&path)
                         .ok()
                         .map(|text| mask_config_text(&text, &key))
@@ -1472,37 +1475,69 @@ impl ConnectionService {
     }
 }
 
-/// 脱敏配置文件文本：抹掉具体密钥值，以及常见的 sk- / Bearer 形态。
-/// 仅用于「查看实际写入的配置」，绝不返回明文。
+/// Never return raw text when parsing fails: it may contain unrecognized secrets.
 fn mask_config_text(text: &str, secret: &str) -> String {
-    let mut masked = text.to_owned();
-    if !secret.is_empty() {
-        masked = masked.replace(secret, "••••••••");
+    fn sensitive(name: &str) -> bool {
+        let name: String = name
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect();
+        [
+            "key",
+            "token",
+            "password",
+            "secret",
+            "authorization",
+            "credential",
+            "cookie",
+            "session",
+            "auth",
+        ]
+        .iter()
+        .any(|field| name.contains(field))
     }
-    // 兜底：把 sk- 开头的长串也抹掉，避免遗漏其它密钥字段。
-    let mut result = String::with_capacity(masked.len());
-    let bytes = masked.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if masked[index..].starts_with("sk-") {
-            let start = index;
-            let mut end = index + 3;
-            let chars: Vec<char> = masked[end..]
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
-                .collect();
-            end += chars.iter().map(|c| c.len_utf8()).sum::<usize>();
-            if end - start >= 8 {
-                result.push_str("sk-••••••••");
-                index = end;
-                continue;
+    fn redact(value: &mut Value, secret: &str) {
+        match value {
+            Value::Object(fields) => {
+                for (name, value) in fields {
+                    if sensitive(name) {
+                        *value = json!("••••••••");
+                    } else {
+                        redact(value, secret);
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    redact(item, secret);
+                }
+            }
+            Value::String(text)
+                if (!secret.is_empty() && text.contains(secret))
+                    || text.contains("sk-")
+                    || text.to_ascii_lowercase().contains("bearer ") =>
+            {
+                *text = "sk-••••••••".into();
+            }
+            _ => {}
+        }
+    }
+    if let Ok(mut value) = serde_json::from_str::<Value>(text) {
+        redact(&mut value, secret);
+        return serde_json::to_string_pretty(&value)
+            .unwrap_or_else(|_| "配置内容无法安全显示".into());
+    }
+    if let Ok(value) = toml::from_str::<toml::Value>(text) {
+        if let Ok(mut value) = serde_json::to_value(value) {
+            redact(&mut value, secret);
+            if let Ok(value) = serde_json::from_value::<toml::Value>(value) {
+                return toml::to_string_pretty(&value)
+                    .unwrap_or_else(|_| "配置内容无法安全显示".into());
             }
         }
-        let ch = masked[index..].chars().next().unwrap();
-        result.push(ch);
-        index += ch.len_utf8();
     }
-    result
+    "配置无法解析，为保护凭据已隐藏内容；请修复配置或恢复备份".into()
 }
 
 fn agent_config(

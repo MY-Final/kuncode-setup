@@ -636,3 +636,27 @@ fn tool_detail_masks_secrets_in_written_config() {
     assert!(masked.contains("sk-••••••••"));
     assert!(masked.contains("other = 1"));
 }
+
+#[test]
+fn config_views_mask_nested_login_tokens_custom_credentials_and_malformed_text() {
+    let text = json!({"tokens": {"access_token": "access.jwt.secret", "refresh_token": "refresh.secret"},
+        "env": {"CUSTOM_API_KEY": "custom-key-without-sk", "COOKIE": "session-cookie", "MODEL": "visible-model"},
+        "providers": [{"password": "password-secret", "authorization": "Bearer custom"}], "theme": "system"}).to_string();
+    let masked = super::mask_config_text(&text, "");
+    for secret in [
+        "access.jwt.secret",
+        "refresh.secret",
+        "custom-key-without-sk",
+        "session-cookie",
+        "password-secret",
+        "Bearer custom",
+    ] {
+        assert!(!masked.contains(secret));
+    }
+    assert!(masked.contains("visible-model") && masked.contains("system"));
+    let malformed = "{\"api_key\":\"sensitive-even-with-broken-json\"";
+    assert!(!super::mask_config_text(malformed, "").contains("sensitive-even-with-broken-json"));
+    let toml = "[env]\nCUSTOM_TOKEN = \"token-without-prefix\"\nMODEL = \"visible-model\"\n";
+    let masked = super::mask_config_text(toml, "");
+    assert!(!masked.contains("token-without-prefix") && masked.contains("visible-model"));
+}
