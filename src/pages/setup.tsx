@@ -145,14 +145,10 @@ export default function SetupPage() {
       .then((values) => {
         if (!active) return;
         setModels(values);
-        setModel((previous) =>
-          values.includes(previous) ? previous : (values[0] ?? ""),
-        );
-        setSelectedModels((previous) => {
-          const kept = previous.filter((item) => values.includes(item));
-          if (kept.length) return kept;
-          return values.length ? [values[0]] : [];
-        });
+        const kept = selectedModels.filter((item) => values.includes(item));
+        const next = kept.length ? kept : values.slice(0, 1);
+        setSelectedModels(next);
+        setModel(next.includes(model) ? model : (next[0] ?? ""));
         if (!values.length)
           setModelNotice("此连接没有可用模型，请检查站点权限。");
       })
@@ -198,7 +194,7 @@ export default function SetupPage() {
             ? previous
             : (usable[0]?.id ?? null),
         );
-        const first = usable[0];
+        const first = usable.find((item) => item.id === tokenId) ?? usable[0];
         if (first) {
           setGroup((previous) =>
             previous && groupValues.some((g) => g.name === previous)

@@ -356,6 +356,8 @@
   flex: 1;
   flex-direction: column;
   min-width: 0;
+  /* Let the main area scroll when the setup shell stacks vertically. */
+  min-height: 0;
 }
 .app-main {
   flex: 1;
@@ -757,6 +759,7 @@
 .coding-tool-copy {
   flex: 1;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 .coding-tool-copy h3 {
   font-size: 16px;
@@ -1424,6 +1427,10 @@
 .setting-row + .setting-row {
   border-top: 1px solid var(--border);
 }
+.setting-row > div:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .setting-row h3 {
   font-size: 12px;
   font-weight: 500;
@@ -1858,6 +1865,14 @@ html[data-motion="reduced"] *::after {
   }
   .setting-row {
     gap: 12px;
+    flex-wrap: wrap;
+  }
+  .setting-row:has(.setting-actions) > div:first-child {
+    flex-basis: 100%;
+  }
+  .setting-actions {
+    flex-wrap: wrap;
+    max-width: 100%;
   }
   .setting-row [data-slot="select-trigger"] {
     width: 112px;

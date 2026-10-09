@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
@@ -784,6 +784,201 @@ it("密钥编辑弹窗的分组下拉使用可交互的 shadcn Select", async ()
   expect(
     await screen.findByRole("option", { name: "default · 默认" }),
   ).toBeInTheDocument();
+});
+
+it("密钥页切换账户后忽略旧账户迟到的列表，API Key 连接不参与密钥管理", async () => {
+  snapshot.connections.push(official, manual, other);
+  const base = native.invoke.getMockImplementation()!;
+  let finishOld: (value: unknown) => void = () => undefined;
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === "list_site_tokens") {
+      if (args.connectionId === official.id)
+        return new Promise((resolve) => {
+          finishOld = resolve;
+        });
+      const values = await base(command, args);
+      return values.map((token: object) => ({
+        ...token,
+        name: "new-account-key",
+      }));
+    }
+    return base(command, args);
+  });
+  render(
+    <AppProvider>
+      <MemoryRouter>
+        <KeysPage />
+      </MemoryRouter>
+    </AppProvider>,
+  );
+  const user = userEvent.setup();
+  await waitFor(() =>
+    expect(native.invoke).toHaveBeenCalledWith("list_site_tokens", {
+      connectionId: official.id,
+    }),
+  );
+  await user.click(await screen.findByRole("combobox", { name: "站点连接" }));
+  expect(
+    screen.queryByRole("option", { name: "other.example" }),
+  ).not.toBeInTheDocument();
+  await user.click(screen.getByRole("option", { name: "manual-owner" }));
+  await screen.findByText("new-account-key");
+  await act(async () =>
+    finishOld(await base("list_site_tokens", { connectionId: official.id })),
+  );
+  expect(screen.getByText("new-account-key")).toBeInTheDocument();
+  expect(screen.queryByText("site-key")).not.toBeInTheDocument();
+});
+
+it("密钥保存失败在编辑弹窗内显示错误，未启用的旧模型限制不被重新启用", async () => {
+  snapshot.connections.push(official);
+  const base = native.invoke.getMockImplementation()!;
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === "list_site_tokens") {
+      const values = await base(command, args);
+      return values.map((token: object) => ({
+        ...token,
+        modelLimitsEnabled: false,
+        modelLimits: ["server-model"],
+      }));
+    }
+    if (command === "update_site_token") throw new Error("站点拒绝保存");
+    return base(command, args);
+  });
+  render(
+    <AppProvider>
+      <MemoryRouter>
+        <KeysPage />
+      </MemoryRouter>
+    </AppProvider>,
+  );
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "编辑" }));
+  const dialog = screen.getByRole("dialog");
+  const model = await within(dialog).findByRole("checkbox", {
+    name: "server-model",
+  });
+  expect(model).toHaveAttribute("aria-checked", "false");
+  await waitFor(() =>
+    expect(within(dialog).getByRole("button", { name: "保存" })).toBeEnabled(),
+  );
+  await user.click(within(dialog).getByRole("button", { name: "保存" }));
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "站点拒绝保存",
+  );
+  expect(native.invoke).toHaveBeenCalledWith(
+    "update_site_token",
+    expect.objectContaining({ modelLimits: [] }),
+  );
+});
+
+it("返回模型步骤保留用户选择的默认模型，不改为未勾选的首个模型", async () => {
+  snapshot.connections.push(other);
+  render(
+    <AppProvider>
+      <MemoryRouter initialEntries={["/setup/codex"]}>
+        <Routes>
+          <Route path="/setup/:agent" element={<SetupPage />} />
+        </Routes>
+      </MemoryRouter>
+    </AppProvider>,
+  );
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "使用此连接" }));
+  await user.click(
+    await screen.findByRole("checkbox", { name: "second-model" }),
+  );
+  await user.click(screen.getByRole("checkbox", { name: "server-model" }));
+  await user.click(screen.getByRole("button", { name: "下一步" }));
+  await screen.findByText("确认配置");
+  await user.click(screen.getByRole("button", { name: "返回" }));
+  const second = await screen.findByRole("checkbox", { name: "second-model" });
+  expect(second).toHaveAttribute("aria-checked", "true");
+  expect(screen.getByText("second-model · 默认")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "下一步" }));
+  await screen.findByText("确认配置");
+  expect(native.invoke).toHaveBeenLastCalledWith(
+    "preview_connection_config",
+    expect.objectContaining({
+      model: "second-model",
+      models: ["second-model"],
+    }),
+  );
+});
+
+it("换绑新密钥同步分组，模型读取失败时不能提交上一分组模型", async () => {
+  snapshot.connections.push(official);
+  snapshot.bindings.codex = {
+    agentId: "codex",
+    connectionId: official.id,
+    model: "server-model",
+    group: "default",
+    tokenId: 7,
+    status: "ready",
+    verified: true,
+  };
+  const base = native.invoke.getMockImplementation()!;
+  let failModels: (reason: unknown) => void = () => undefined;
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === "list_site_tokens") {
+      const values = await base(command, args);
+      return [
+        ...values,
+        { ...values[0], id: 8, name: "premium-key", group: "premium" },
+      ];
+    }
+    if (command === "site_groups")
+      return [
+        { name: "default", ratio: 1 },
+        { name: "premium", ratio: 2 },
+      ];
+    if (command === "group_models" && args.group === "premium")
+      return new Promise((_, reject) => {
+        failModels = reject;
+      });
+    return base(command, args);
+  });
+  function Harness() {
+    const { agents, loading } = useApp();
+    return loading ? null : (
+      <RebindDialog
+        agent={agents[0]}
+        onOpenChange={() => undefined}
+        onDone={() => undefined}
+      />
+    );
+  }
+  render(
+    <AppProvider>
+      <Harness />
+    </AppProvider>,
+  );
+  const user = userEvent.setup();
+  const submit = await screen.findByRole("button", { name: "换绑密钥" });
+  await waitFor(() => expect(submit).toBeEnabled());
+  await user.click(screen.getByRole("combobox", { name: /^密钥$/ }));
+  await user.click(screen.getByRole("option", { name: /premium-key/ }));
+  await waitFor(() =>
+    expect(native.invoke).toHaveBeenCalledWith("group_models", {
+      connectionId: official.id,
+      group: "premium",
+    }),
+  );
+  expect(screen.getByRole("combobox", { name: "分组" })).toHaveTextContent(
+    "premium",
+  );
+  expect(submit).toBeDisabled();
+  expect(
+    screen.queryByRole("checkbox", { name: "server-model" }),
+  ).not.toBeInTheDocument();
+  await act(async () => failModels(new Error("分组读取失败")));
+  expect(await screen.findByRole("alert")).toHaveTextContent("分组读取失败");
+  expect(submit).toBeDisabled();
+  expect(
+    native.invoke.mock.calls.some(
+      ([command]) => command === "apply_connection_config",
+    ),
+  ).toBe(false);
 });
 
 it("工具详情页展示绑定密钥与脱敏配置", async () => {

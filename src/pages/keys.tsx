@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Copy, KeyRound, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -65,14 +65,23 @@ export default function KeysPage() {
   const [pendingDelete, setPendingDelete] = useState<SiteToken | null>(null);
   const [offlineAt, setOfflineAt] = useState<number | null>(null);
   const [copying, setCopying] = useState<number | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const loadRequest = useRef(0);
 
-  const usableConnections = connections.filter((item) => item.connected);
-  const usableIds = usableConnections.map((item) => item.id).join(",");
+  const usableConnections = connections.filter(
+    (item) => item.connected && item.kind !== "api_key",
+  );
+  const usableIds = JSON.stringify(usableConnections.map((item) => item.id));
 
   const load = useCallback(async (id: string) => {
+    const request = ++loadRequest.current;
+    setError(null);
+    setOfflineAt(null);
+    setTokens([]);
+    setGroups([]);
     if (!id) {
-      setTokens([]);
-      setGroups([]);
+      setLoading(false);
       return;
     }
     setLoading(true);
@@ -82,11 +91,13 @@ export default function KeysPage() {
         api.listSiteTokens(id),
         api.siteGroups(id).catch(() => [] as SiteGroup[]),
       ]);
+      if (request !== loadRequest.current) return;
       setTokens(tokenValues);
       setGroups(groupValues);
       setOfflineAt(null);
       cacheSiteTokens(id, tokenValues);
     } catch (value) {
+      if (request !== loadRequest.current) return;
       // 网络不可用时降级展示上次缓存的密钥列表。
       const cached = readCachedSiteTokens(id);
       if (cached) {
@@ -98,27 +109,36 @@ export default function KeysPage() {
         setTokens([]);
       }
     } finally {
-      setLoading(false);
+      if (request === loadRequest.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    const first = usableIds ? usableIds.split(",")[0] : "";
-    if (!connectionId || !usableIds.includes(connectionId)) {
-      if (first) setConnectionId(first);
-      else setConnectionId("");
+    const ids: string[] = JSON.parse(usableIds);
+    if (connectionId && !ids.includes(connectionId)) {
+      setConnectionId(ids[0] ?? "");
+      return;
+    }
+    if (!connectionId && ids.length) {
+      setConnectionId(ids[0]);
       return;
     }
     void load(connectionId);
+    return () => {
+      loadRequest.current++;
+    };
   }, [connectionId, load, usableIds]);
 
   useEffect(() => {
     if (!creating && editing === null) return;
     if (!connectionId || !group) {
       setGroupModels([]);
+      setModelsLoading(false);
       return;
     }
     let active = true;
+    setGroupModels([]);
+    setModelsLoading(true);
     api
       .groupModels(connectionId, group)
       .then((values) => {
@@ -130,12 +150,16 @@ export default function KeysPage() {
         if (!active) return;
         // 离线时回退到缓存的分组模型。
         setGroupModels(readCachedGroupModels(connectionId, group) ?? []);
+      })
+      .finally(() => {
+        if (active) setModelsLoading(false);
       });
     return () => {
       active = false;
     };
   }, [creating, editing, connectionId, group]);
   function openCreate() {
+    setFormError(null);
     setCreating(true);
     setEditing(null);
     setName("");
@@ -143,16 +167,17 @@ export default function KeysPage() {
     setLimits([]);
   }
   function openEdit(token: SiteToken) {
+    setFormError(null);
     setEditing(token);
     setCreating(false);
     setName(token.name);
     setGroup(token.group || groups[0]?.name || "");
-    setLimits(token.modelLimits);
+    setLimits(token.modelLimitsEnabled ? token.modelLimits : []);
   }
   async function save() {
-    if (saving || !name.trim() || !connectionId) return;
+    if (saving || modelsLoading || !name.trim() || !connectionId) return;
     setSaving(true);
-    setError(null);
+    setFormError(null);
     try {
       if (editing) {
         await api.updateSiteToken(
@@ -169,7 +194,7 @@ export default function KeysPage() {
       setEditing(null);
       await load(connectionId);
     } catch (value) {
-      setError(errorMessage(value));
+      setFormError(errorMessage(value));
     } finally {
       setSaving(false);
     }
@@ -216,7 +241,11 @@ export default function KeysPage() {
               <RefreshCw className={loading ? "animate-spin" : undefined} />
               刷新
             </Button>
-            <Button size="sm" onClick={openCreate} disabled={!connectionId}>
+            <Button
+              size="sm"
+              onClick={openCreate}
+              disabled={!connectionId || loading}
+            >
               <Plus />
               新建密钥
             </Button>
@@ -226,7 +255,19 @@ export default function KeysPage() {
       {usableConnections.length > 1 && (
         <div className="form-field">
           <Label htmlFor="keys-connection">站点连接</Label>
-          <Select value={connectionId} onValueChange={setConnectionId}>
+          <Select
+            value={connectionId}
+            onValueChange={(id) => {
+              loadRequest.current++;
+              setTokens([]);
+              setGroups([]);
+              setCreating(false);
+              setEditing(null);
+              setPendingDelete(null);
+              setConnectionId(id);
+            }}
+            disabled={saving}
+          >
             <SelectTrigger id="keys-connection" className="w-full">
               <SelectValue />
             </SelectTrigger>
@@ -333,19 +374,19 @@ export default function KeysPage() {
       <Dialog
         open={creating || editing !== null}
         onOpenChange={(value) => {
-          if (!value) {
+          if (!value && !saving) {
             setCreating(false);
             setEditing(null);
           }
         }}
       >
-        <DialogContent>
+        <DialogContent showCloseButton={!saving}>
           <DialogHeader>
             <DialogTitle>{editing ? "编辑密钥" : "新建密钥"}</DialogTitle>
             <DialogDescription>
               {editing
                 ? "修改密钥名称或分组，不会改变密钥本身。"
-                : "创建后会生成一把新密钥，明文只在创建时显示一次。"}
+                : "创建后可在密钥列表中复制密钥。"}
             </DialogDescription>
           </DialogHeader>
           <div className="form-field">
@@ -356,11 +397,12 @@ export default function KeysPage() {
               onChange={(event) => setName(event.target.value)}
               maxLength={50}
               required
+              disabled={saving}
             />
           </div>
           <div className="form-field">
             <Label htmlFor="key-group">分组</Label>
-            <Select value={group} onValueChange={setGroup}>
+            <Select value={group} onValueChange={setGroup} disabled={saving}>
               <SelectTrigger id="key-group" className="w-full">
                 <SelectValue />
               </SelectTrigger>
@@ -382,6 +424,7 @@ export default function KeysPage() {
               不勾选表示该密钥可使用分组内全部模型。
             </p>
             <div className="key-model-list">
+              {modelsLoading && <span role="status">正在读取分组模型…</span>}
               {groupModels.length === 0 && (
                 <span className="page-footnote">该分组暂无模型数据。</span>
               )}
@@ -392,6 +435,7 @@ export default function KeysPage() {
                   htmlFor={`key-limit-${item}`}
                 >
                   <Checkbox
+                    disabled={saving || modelsLoading}
                     id={`key-limit-${item}`}
                     checked={limits.includes(item)}
                     onCheckedChange={() =>
@@ -407,9 +451,15 @@ export default function KeysPage() {
               ))}
             </div>
           </div>
+          {formError && (
+            <p className="inline-error" role="alert">
+              {formError}
+            </p>
+          )}
           <div className="setup-form-footer">
             <Button
               variant="outline"
+              disabled={saving}
               onClick={() => {
                 setCreating(false);
                 setEditing(null);
@@ -419,7 +469,7 @@ export default function KeysPage() {
             </Button>
             <Button
               onClick={() => void save()}
-              disabled={saving || !name.trim()}
+              disabled={saving || modelsLoading || !name.trim()}
             >
               {saving && <Loader2 className="animate-spin" />}
               {editing ? "保存" : "创建"}

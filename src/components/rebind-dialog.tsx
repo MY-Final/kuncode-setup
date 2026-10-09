@@ -57,9 +57,14 @@ export function RebindDialog({
   const [advanced, setAdvanced] = useState<AdvancedConfig>({ models: {} });
   const [advancedValid, setAdvancedValid] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [keysReady, setKeysReady] = useState(false);
+  const [modelsLoading, setModelsLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pinging, setPinging] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const accountConnections = connections.filter(
+    (item) => item.connected && item.kind !== "api_key",
+  );
 
   // 打开某个工具时初始化默认选择；切换工具才重置，store 刷新不清空。
   useEffect(() => {
@@ -86,6 +91,9 @@ export function RebindDialog({
     if (!agent || !connectionId) return;
     let active = true;
     setLoading(true);
+    setKeysReady(false);
+    setTokens([]);
+    setGroups([]);
     setError(null);
     Promise.all([
       api.listSiteTokens(connectionId),
@@ -96,12 +104,13 @@ export function RebindDialog({
         const usable = tokenValues.filter((item) => item.status === 1);
         setTokens(usable);
         setGroups(groupValues);
+        setKeysReady(true);
         setTokenId((previous) =>
           usable.some((item) => item.id === previous)
             ? previous
             : (usable[0]?.id ?? null),
         );
-        const first = usable[0];
+        const first = usable.find((item) => item.id === tokenId) ?? usable[0];
         if (first) {
           setGroup((previous) =>
             previous && groupValues.some((item) => item.name === previous)
@@ -122,13 +131,15 @@ export function RebindDialog({
   }, [agent?.id, connectionId]);
 
   useEffect(() => {
-    if (!agent || !connectionId || !group) return;
+    if (!agent || !connectionId || loading || !keysReady) return;
     let active = true;
-    api
-      .groupModels(connectionId, group)
-      .then((values) =>
-        values.length ? values : api.connectionModels(connectionId),
-      )
+    setModelsLoading(true);
+    setModels([]);
+    setError(null);
+    (group
+      ? api.groupModels(connectionId, group)
+      : api.connectionModels(connectionId)
+    )
       .then((values) => {
         if (!active) return;
         setModels(values);
@@ -138,13 +149,32 @@ export function RebindDialog({
           return values.length ? [values[0]] : [];
         });
       })
-      .catch(() => {
-        if (active) setModels([]);
+      .catch((value: unknown) => {
+        if (!active) return;
+        setModels([]);
+        setSelectedModels([]);
+        setError(errorMessage(value));
+      })
+      .finally(() => {
+        if (active) setModelsLoading(false);
       });
     return () => {
       active = false;
     };
-  }, [agent?.id, connectionId, group]);
+  }, [agent?.id, connectionId, group, loading, keysReady]);
+
+  function changeConnection(id: string) {
+    setConnectionId(id);
+    setTokens([]);
+    setTokenId(null);
+    setGroup("");
+    setGroups([]);
+    setModels([]);
+    setSelectedModels([]);
+    setAdvanced({ models: {} });
+    setLoading(true);
+    setKeysReady(false);
+  }
 
   /** 对所有已连接站点测速，自动选择延迟最低的一个。 */
   async function pickFastest() {
@@ -168,7 +198,7 @@ export function RebindDialog({
         return;
       }
       reachable.sort((a, b) => a.ms - b.ms);
-      setConnectionId(reachable[0].id);
+      if (reachable[0].id !== connectionId) changeConnection(reachable[0].id);
     } finally {
       setPinging(false);
     }
@@ -185,7 +215,17 @@ export function RebindDialog({
   }
 
   async function submit() {
-    if (!agent || busy || !advancedValid || !tokenId || !defaultModel) return;
+    if (
+      !agent ||
+      busy ||
+      loading ||
+      modelsLoading ||
+      !advancedValid ||
+      !tokenId ||
+      !defaultModel ||
+      !models.includes(defaultModel)
+    )
+      return;
     setBusy(true);
     setError(null);
     try {
@@ -229,8 +269,13 @@ export function RebindDialog({
   }
 
   return (
-    <Dialog open={!!agent} onOpenChange={onOpenChange}>
-      <DialogContent className="rebind-dialog">
+    <Dialog
+      open={!!agent}
+      onOpenChange={(open) => {
+        if (!busy) onOpenChange(open);
+      }}
+    >
+      <DialogContent className="rebind-dialog" showCloseButton={!busy}>
         <DialogHeader>
           <DialogTitle>换绑 {agent?.name} 的密钥</DialogTitle>
           <DialogDescription>
@@ -243,21 +288,23 @@ export function RebindDialog({
             正在读取站点密钥…
           </p>
         )}
-        {connections.filter((item) => item.connected).length > 1 && (
+        {accountConnections.length > 1 && (
           <div className="form-field">
             <Label htmlFor="rebind-connection">站点连接</Label>
-            <Select value={connectionId} onValueChange={setConnectionId}>
+            <Select
+              value={connectionId}
+              onValueChange={changeConnection}
+              disabled={busy || pinging}
+            >
               <SelectTrigger id="rebind-connection" className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {connections
-                  .filter((item) => item.connected)
-                  .map((item) => (
-                    <SelectItem key={item.id} value={item.id}>
-                      {item.alias ?? item.account ?? new URL(item.siteUrl).host}
-                    </SelectItem>
-                  ))}
+                {accountConnections.map((item) => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.alias ?? item.account ?? new URL(item.siteUrl).host}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
             <Button
@@ -265,7 +312,7 @@ export function RebindDialog({
               variant="ghost"
               size="sm"
               onClick={() => void pickFastest()}
-              disabled={pinging}
+              disabled={pinging || busy}
             >
               {pinging && <Loader2 className="animate-spin" />}
               选择列表响应最快的连接
@@ -276,7 +323,18 @@ export function RebindDialog({
           <Label htmlFor="rebind-token">密钥</Label>
           <Select
             value={tokenId != null ? String(tokenId) : ""}
-            onValueChange={(value) => setTokenId(Number(value))}
+            disabled={loading || busy}
+            onValueChange={(value) => {
+              const id = Number(value);
+              setTokenId(id);
+              const picked = tokens.find((token) => token.id === id);
+              const nextGroup = picked?.group || groups[0]?.name || "";
+              if (nextGroup !== group) {
+                setModels([]);
+                setSelectedModels([]);
+                setGroup(nextGroup);
+              }
+            }}
           >
             <SelectTrigger id="rebind-token" className="w-full">
               <SelectValue placeholder="暂无可用密钥" />
@@ -293,7 +351,15 @@ export function RebindDialog({
         {groups.length > 0 && (
           <div className="form-field">
             <Label htmlFor="rebind-group">分组</Label>
-            <Select value={group} onValueChange={setGroup}>
+            <Select
+              value={group}
+              onValueChange={(value) => {
+                setModels([]);
+                setSelectedModels([]);
+                setGroup(value);
+              }}
+              disabled={loading || busy}
+            >
               <SelectTrigger id="rebind-group" className="w-full">
                 <SelectValue />
               </SelectTrigger>
@@ -311,6 +377,7 @@ export function RebindDialog({
         )}
         <div className="form-field">
           <Label>模型</Label>
+          {modelsLoading && <p role="status">正在读取分组模型…</p>}
           <p className="page-footnote">
             第一个勾选的模型作为默认模型；可多选。
           </p>
@@ -329,6 +396,7 @@ export function RebindDialog({
                   htmlFor={checkboxId}
                 >
                   <Checkbox
+                    disabled={busy || loading || modelsLoading}
                     id={checkboxId}
                     checked={checked}
                     onCheckedChange={() => toggle(model)}
@@ -371,7 +439,15 @@ export function RebindDialog({
           </Button>
           <Button
             onClick={() => void submit()}
-            disabled={busy || !advancedValid || !tokenId || !defaultModel}
+            disabled={
+              busy ||
+              loading ||
+              modelsLoading ||
+              !advancedValid ||
+              !tokenId ||
+              !defaultModel ||
+              !models.includes(defaultModel)
+            }
           >
             {busy && <Loader2 className="animate-spin" />}换绑密钥
           </Button>
