@@ -1,4 +1,5 @@
 import { Search, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 export function SearchField({
   value,
@@ -19,9 +20,15 @@ export function SearchField({
         onChange={(e) => onChange(e.target.value)}
       />
       {value && (
-        <button aria-label="清除搜索" onClick={() => onChange("")}>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="search-clear"
+          aria-label="清除搜索"
+          onClick={() => onChange("")}
+        >
           <X />
-        </button>
+        </Button>
       )}
     </div>
   );

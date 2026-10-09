@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useApp } from "@/lib/store";
 import * as api from "@/lib/tauri/api";
 import { errorMessage } from "@/lib/utils";
@@ -208,30 +209,25 @@ export function ConnectionDialog({
           <form onSubmit={connect} className="connection-form">
             <fieldset disabled={busy} className="connection-modes">
               <legend className="sr-only">连接方式</legend>
-              <label>
-                <input
-                  type="radio"
-                  name="connection-mode"
-                  checked={mode === "newapi_pat"}
-                  onChange={() => {
-                    setMode("newapi_pat");
-                    setError(null);
-                  }}
-                />
-                用户 Token
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  name="connection-mode"
-                  checked={mode === "api_key"}
-                  onChange={() => {
-                    setMode("api_key");
-                    setError(null);
-                  }}
-                />
-                API Key
-              </label>
+              <RadioGroup
+                aria-label="连接方式"
+                value={mode}
+                disabled={busy}
+                onValueChange={(value) => {
+                  setMode(value as "newapi_pat" | "api_key");
+                  setError(null);
+                }}
+                className="connection-modes-group"
+              >
+                <label htmlFor="connection-mode-pat">
+                  <RadioGroupItem id="connection-mode-pat" value="newapi_pat" />
+                  用户 Token
+                </label>
+                <label htmlFor="connection-mode-key">
+                  <RadioGroupItem id="connection-mode-key" value="api_key" />
+                  API Key
+                </label>
+              </RadioGroup>
             </fieldset>
             <div className="form-field">
               <Label htmlFor="connection-site">站点地址</Label>

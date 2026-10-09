@@ -283,22 +283,29 @@
 .nav-item-subtle.active {
   color: var(--sidebar-accent-foreground);
 }
+.search-clear[data-slot="button"] {
+  color: var(--muted-foreground);
+}
 .sidebar-footer {
   margin-top: auto;
   padding-bottom: 20px;
 }
-.sidebar-toggle {
+.sidebar-toggle[data-slot="button"] {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 13px;
+  height: auto;
   padding: 9px 12px;
   width: 100%;
   color: var(--muted-foreground);
   border-radius: 5px;
   font-size: 11px;
+  font-weight: 400;
 }
-.sidebar-toggle:hover {
+.sidebar-toggle[data-slot="button"]:hover {
   background: var(--secondary);
+  color: var(--muted-foreground);
 }
 .sidebar-toggle svg {
   width: 17px;
@@ -394,12 +401,13 @@
   padding-bottom: 16px;
   border-bottom: 1px solid var(--border);
 }
-.account-avatar {
-  display: grid;
-  place-items: center;
+.account-avatar[data-slot="avatar"] {
   width: 40px;
   height: 40px;
   flex: none;
+  border-radius: 10px;
+}
+.account-avatar .account-avatar-fallback {
   border-radius: 10px;
   background: color-mix(in oklab, var(--primary) 12%, transparent);
   color: var(--primary);
@@ -423,18 +431,17 @@
   color: var(--muted-foreground);
   margin-top: 3px;
 }
-.account-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+.account-badge[data-slot="badge"] {
   flex: none;
+  padding: 0;
+  border: 0;
   font-size: 10px;
   color: var(--success, #16a34a);
 }
-.account-badge.warning {
+.account-badge[data-slot="badge"].warning {
   color: var(--warning, #d97706);
 }
-.account-badge svg {
+.account-badge[data-slot="badge"] svg {
   width: 13px;
   height: 13px;
 }
@@ -780,13 +787,17 @@
   max-width: 650px;
   padding: 26px 30px 40px;
 }
-.flow-back {
+.flow-back[data-slot="button"] {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  height: auto;
+  min-width: 0;
+  padding: 4px 8px;
+  margin: 0 0 24px -8px;
   font-size: 11px;
+  font-weight: 400;
   color: var(--muted-foreground);
-  margin-bottom: 24px;
 }
 .flow-back svg {
   width: 13px;
@@ -862,17 +873,18 @@
   gap: 20px;
 }
 .connection-modes {
+  display: block;
+  font-size: 13px;
+}
+.connection-modes-group {
   display: flex;
   gap: 24px;
-  font-size: 13px;
 }
 .connection-modes label {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.connection-modes input {
-  accent-color: var(--blue);
+  cursor: pointer;
 }
 .connection-wait {
   display: flex;
@@ -937,16 +949,6 @@
   gap: 6px;
   font-size: 12px;
   color: var(--foreground);
-}
-.model-select {
-  width: 100%;
-  border: 1px solid var(--input);
-  background: var(--background);
-  color: var(--foreground);
-  border-radius: 5px;
-  padding: 7px 9px;
-  font-size: 13px;
-  font-family: inherit;
 }
 .form-field input {
   height: 37px;

@@ -86,14 +86,16 @@ export default function ToolDetailPage() {
           </Button>
         }
       />
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         className="flow-back"
         onClick={() => navigate("/models")}
       >
         <ArrowLeft />
         返回工具列表
-      </button>
+      </Button>
       {loading && !detail && (
         <p role="status">
           <Loader2 className="animate-spin inline" />

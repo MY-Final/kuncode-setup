@@ -8,6 +8,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { usePreferences } from "@/lib/preferences";
 const nav = [
@@ -61,7 +62,8 @@ export function Sidebar() {
         ))}
       </nav>
       <div className="sidebar-footer">
-        <button
+        <Button
+          variant="ghost"
           className="sidebar-toggle"
           onClick={() => updatePreferences({ sidebarCollapsed: !collapsed })}
           aria-label={collapsed ? "展开侧栏" : "折叠侧栏"}
@@ -71,7 +73,7 @@ export function Sidebar() {
         >
           {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
           <span className="sidebar-label">折叠侧栏</span>
-        </button>
+        </Button>
         <span className="sidebar-version">v0.1.0</span>
       </div>
     </aside>

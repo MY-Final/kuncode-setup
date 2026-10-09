@@ -438,6 +438,35 @@ it("删除被引用的密钥前提示引用数量", async () => {
   expect(await screen.findByText("删除密钥「site-key」？")).toBeInTheDocument();
 });
 
+it("密钥编辑弹窗的分组下拉使用可交互的 shadcn Select", async () => {
+  snapshot.connections.push(official);
+  snapshot.currentOfficial = official.id;
+  render(
+    <AppProvider>
+      <MemoryRouter initialEntries={["/keys"]}>
+        <Routes>
+          <Route path="/keys" element={<KeysPage />} />
+        </Routes>
+      </MemoryRouter>
+    </AppProvider>,
+  );
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "编辑" }));
+  expect(await screen.findByText("编辑密钥")).toBeInTheDocument();
+  // 允许的模型：必须是可切换的 shadcn Checkbox（Radix），而不是原生 input
+  const limit = await screen.findByRole("checkbox", { name: "server-model" });
+  expect(limit).toHaveAttribute("data-slot", "checkbox");
+  await user.click(limit);
+  expect(limit).toHaveAttribute("data-state", "checked");
+  expect(document.querySelector('input[type="checkbox"]')).toBeNull();
+  // 分组：shadcn Select 展开后能看到选项
+  const group = await screen.findByRole("combobox", { name: "分组" });
+  await user.click(group);
+  expect(
+    await screen.findByRole("option", { name: "default · 默认" }),
+  ).toBeInTheDocument();
+});
+
 it("工具详情页展示绑定密钥与脱敏配置", async () => {
   snapshot.connections.push(official);
   snapshot.currentOfficial = official.id;

@@ -15,6 +15,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { useApp } from "@/lib/store";
 import * as api from "@/lib/tauri/api";
 import { errorMessage } from "@/lib/utils";
@@ -170,9 +172,11 @@ export function AccountPanel({
         {connectionId ? (
           <>
             <div className="account-identity">
-              <span className="account-avatar" aria-hidden="true">
-                {initial}
-              </span>
+              <Avatar className="account-avatar" aria-hidden="true">
+                <AvatarFallback className="account-avatar-fallback">
+                  {initial}
+                </AvatarFallback>
+              </Avatar>
               <div>
                 <strong>{displayName ?? "KunCode 用户"}</strong>
                 <p>
@@ -185,16 +189,16 @@ export function AccountPanel({
                 </p>
               </div>
               {profile?.status === "正常" && (
-                <span className="account-badge">
+                <Badge variant="outline" className="account-badge">
                   <BadgeCheck aria-hidden="true" />
                   正常
-                </span>
+                </Badge>
               )}
               {profile?.status && profile.status !== "正常" && (
-                <span className="account-badge warning">
+                <Badge variant="outline" className="account-badge warning">
                   <CircleAlert aria-hidden="true" />
                   {profile.status}
-                </span>
+                </Badge>
               )}
             </div>
 

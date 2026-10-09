@@ -9,6 +9,14 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useApp } from "@/lib/store";
 import * as api from "@/lib/tauri/api";
 import type { AgentMeta, SiteGroup, SiteToken } from "@/lib/types";
@@ -195,20 +203,20 @@ export function RebindDialog({
         {connections.filter((item) => item.connected).length > 1 && (
           <div className="form-field">
             <Label htmlFor="rebind-connection">站点连接</Label>
-            <select
-              id="rebind-connection"
-              className="model-select"
-              value={connectionId}
-              onChange={(event) => setConnectionId(event.target.value)}
-            >
-              {connections
-                .filter((item) => item.connected)
-                .map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.alias ?? item.account ?? new URL(item.siteUrl).host}
-                  </option>
-                ))}
-            </select>
+            <Select value={connectionId} onValueChange={setConnectionId}>
+              <SelectTrigger id="rebind-connection" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {connections
+                  .filter((item) => item.connected)
+                  .map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.alias ?? item.account ?? new URL(item.siteUrl).host}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
             <Button
               type="button"
               variant="ghost"
@@ -223,37 +231,39 @@ export function RebindDialog({
         )}
         <div className="form-field">
           <Label htmlFor="rebind-token">密钥</Label>
-          <select
-            id="rebind-token"
-            className="model-select"
-            value={tokenId ?? ""}
-            onChange={(event) => setTokenId(Number(event.target.value))}
+          <Select
+            value={tokenId != null ? String(tokenId) : ""}
+            onValueChange={(value) => setTokenId(Number(value))}
           >
-            {tokens.length === 0 && <option value="">暂无可用密钥</option>}
-            {tokens.map((token) => (
-              <option key={token.id} value={token.id}>
-                {token.name} · {token.maskedKey}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger id="rebind-token" className="w-full">
+              <SelectValue placeholder="暂无可用密钥" />
+            </SelectTrigger>
+            <SelectContent>
+              {tokens.map((token) => (
+                <SelectItem key={token.id} value={String(token.id)}>
+                  {token.name} · {token.maskedKey}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         {groups.length > 0 && (
           <div className="form-field">
             <Label htmlFor="rebind-group">分组</Label>
-            <select
-              id="rebind-group"
-              className="model-select"
-              value={group}
-              onChange={(event) => setGroup(event.target.value)}
-            >
-              {groups.map((item) => (
-                <option key={item.name} value={item.name}>
-                  {item.description
-                    ? `${item.name} · ${item.description}`
-                    : item.name}
-                </option>
-              ))}
-            </select>
+            <Select value={group} onValueChange={setGroup}>
+              <SelectTrigger id="rebind-group" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {groups.map((item) => (
+                  <SelectItem key={item.name} value={item.name}>
+                    {item.description
+                      ? `${item.name} · ${item.description}`
+                      : item.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         )}
         <div className="form-field">
@@ -268,15 +278,17 @@ export function RebindDialog({
             {models.map((model) => {
               const checked = selectedModels.includes(model);
               const isDefault = defaultModel === model;
+              const checkboxId = `rebind-model-${agent?.id}-${model}`;
               return (
                 <label
                   key={model}
                   className={cn("model-row", checked && "selected")}
+                  htmlFor={checkboxId}
                 >
-                  <input
-                    type="checkbox"
+                  <Checkbox
+                    id={checkboxId}
                     checked={checked}
-                    onChange={() => toggle(model)}
+                    onCheckedChange={() => toggle(model)}
                     aria-label={model}
                   />
                   <span className="model-copy">

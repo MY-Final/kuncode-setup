@@ -12,6 +12,14 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useApp } from "@/lib/store";
 import * as api from "@/lib/tauri/api";
@@ -303,8 +311,10 @@ export default function SetupPage() {
       : selectedModels;
   return (
     <>
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         className="flow-back"
         disabled={busy || applying.current}
         onClick={() => {
@@ -317,7 +327,7 @@ export default function SetupPage() {
       >
         <ArrowLeft />
         返回
-      </button>
+      </Button>
       <PageHeader
         title={
           stage === "connect"
@@ -498,20 +508,20 @@ export default function SetupPage() {
             {groups.length > 0 && (
               <div className="form-field">
                 <Label htmlFor="token-group">分组</Label>
-                <select
-                  id="token-group"
-                  className="model-select"
-                  value={group}
-                  onChange={(event) => setGroup(event.target.value)}
-                >
-                  {groups.map((item) => (
-                    <option key={item.name} value={item.name}>
-                      {item.description
-                        ? `${item.name} · ${item.description}`
-                        : item.name}
-                    </option>
-                  ))}
-                </select>
+                <Select value={group} onValueChange={setGroup}>
+                  <SelectTrigger id="token-group" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {groups.map((item) => (
+                      <SelectItem key={item.name} value={item.name}>
+                        {item.description
+                          ? `${item.name} · ${item.description}`
+                          : item.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <p className="page-footnote">分组决定费率、可用模型与限速。</p>
               </div>
             )}
@@ -556,11 +566,12 @@ export default function SetupPage() {
                   <label
                     key={item.id}
                     className={cn("model-row", checked && "selected")}
+                    htmlFor={`setup-model-${item.id}`}
                   >
-                    <input
-                      type="checkbox"
+                    <Checkbox
+                      id={`setup-model-${item.id}`}
                       checked={checked}
-                      onChange={() => {
+                      onCheckedChange={() => {
                         setSelectedModels((previous) => {
                           const next = checked
                             ? previous.filter((id) => id !== item.id)

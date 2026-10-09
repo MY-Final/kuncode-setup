@@ -4,6 +4,14 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -218,18 +226,18 @@ export default function KeysPage() {
       {usableConnections.length > 1 && (
         <div className="form-field">
           <Label htmlFor="keys-connection">站点连接</Label>
-          <select
-            id="keys-connection"
-            className="model-select"
-            value={connectionId}
-            onChange={(event) => setConnectionId(event.target.value)}
-          >
-            {usableConnections.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.account ?? new URL(item.siteUrl).host}
-              </option>
-            ))}
-          </select>
+          <Select value={connectionId} onValueChange={setConnectionId}>
+            <SelectTrigger id="keys-connection" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {usableConnections.map((item) => (
+                <SelectItem key={item.id} value={item.id}>
+                  {item.account ?? new URL(item.siteUrl).host}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       )}
       {!api.isTauri() && (
@@ -352,20 +360,20 @@ export default function KeysPage() {
           </div>
           <div className="form-field">
             <Label htmlFor="key-group">分组</Label>
-            <select
-              id="key-group"
-              className="model-select"
-              value={group}
-              onChange={(event) => setGroup(event.target.value)}
-            >
-              {groups.map((item) => (
-                <option key={item.name} value={item.name}>
-                  {item.description
-                    ? `${item.name} · ${item.description}`
-                    : item.name}
-                </option>
-              ))}
-            </select>
+            <Select value={group} onValueChange={setGroup}>
+              <SelectTrigger id="key-group" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {groups.map((item) => (
+                  <SelectItem key={item.name} value={item.name}>
+                    {item.description
+                      ? `${item.name} · ${item.description}`
+                      : item.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <p className="page-footnote">分组决定费率、可用模型与限速。</p>
           </div>
           <div className="form-field">
@@ -378,11 +386,15 @@ export default function KeysPage() {
                 <span className="page-footnote">该分组暂无模型数据。</span>
               )}
               {groupModels.map((item) => (
-                <label key={item} className="key-model-item">
-                  <input
-                    type="checkbox"
+                <label
+                  key={item}
+                  className="key-model-item"
+                  htmlFor={`key-limit-${item}`}
+                >
+                  <Checkbox
+                    id={`key-limit-${item}`}
                     checked={limits.includes(item)}
-                    onChange={() =>
+                    onCheckedChange={() =>
                       setLimits((previous) =>
                         previous.includes(item)
                           ? previous.filter((id) => id !== item)
