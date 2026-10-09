@@ -159,6 +159,7 @@ pub struct ConnectionSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct AccountProfile {
     pub connection_id: String,
+    pub shop_url: Option<String>,
     pub provider: String,
     pub kind: ConnectionKind,
     pub site_url: String,
@@ -534,6 +535,7 @@ impl ConnectionService {
         if connection.kind == ConnectionKind::ApiKey {
             return Ok(AccountProfile {
                 connection_id: connection.id,
+                shop_url: None,
                 provider: "openai_compatible".into(),
                 kind: connection.kind,
                 site_url: connection.site_url,
@@ -566,6 +568,7 @@ impl ConnectionService {
         } else {
             None
         };
+        let site_status = client.status(&connection.site_url).ok();
         let (provider, user, quota) = match desktop.and_then(|response| {
             response
                 .get("data")
@@ -584,10 +587,9 @@ impl ConnectionService {
             None => {
                 let profile =
                     client.profile(&connection.site_url, &secret, connection.legacy_user_id)?;
-                let quota = client
-                    .status(&connection.site_url)
-                    .ok()
-                    .map(|status| quota_from_status(&status, &profile));
+                let quota = site_status
+                    .as_ref()
+                    .map(|status| quota_from_status(status, &profile));
                 ("newapi".to_owned(), Some(profile), quota)
             }
         };
@@ -621,6 +623,7 @@ impl ConnectionService {
         };
         Ok(AccountProfile {
             connection_id: connection.id,
+            shop_url: site_status.as_ref().and_then(shop_url_from_status),
             provider,
             kind: connection.kind,
             site_url: connection.site_url,
@@ -657,6 +660,16 @@ impl ConnectionService {
             connected: connection.connected,
         })
     }
+    pub fn shop_url(&self, id: &str) -> AppResult<String> {
+        let connection = self.connection(id)?;
+        if connection.kind == ConnectionKind::ApiKey {
+            return Err(AppError::Unsupported("此连接不提供账户充值入口".into()));
+        }
+        let status = SiteClient::new()?.status(&connection.site_url)?;
+        shop_url_from_status(&status)
+            .ok_or_else(|| AppError::Unsupported("站点未配置有效的小铺地址，请刷新账户信息".into()))
+    }
+
     pub fn models(&self, id: &str) -> AppResult<Vec<String>> {
         let connection = self.connection(id)?;
         let secret = vault::get(&connection.credential_reference())?;
@@ -1592,6 +1605,19 @@ fn agent_config(
         api_key: key.into(),
     })
 }
+fn shop_url_from_status(status: &Value) -> Option<String> {
+    let raw = status.get("liandong_shop_url")?.as_str()?.trim();
+    let url = reqwest::Url::parse(raw).ok()?;
+    if !matches!(url.scheme(), "https" | "http")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return None;
+    }
+    Some(url.to_string())
+}
+
 /// Converts the public site status and a generic New API profile into the same
 /// display shape the KunCode desktop endpoint returns.
 fn quota_from_status(status: &Value, profile: &Value) -> Value {

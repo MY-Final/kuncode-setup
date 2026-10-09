@@ -136,6 +136,14 @@ export async function logoutConnection(
   requireDesktop();
   return invoke("logout_connection", { connectionId });
 }
+export async function openConnectionShop(connectionId: string): Promise<void> {
+  requireDesktop();
+  return invoke("open_connection_shop", { connectionId });
+}
+export async function connectionShopUrl(connectionId: string): Promise<string> {
+  requireDesktop();
+  return invoke("connection_shop_url", { connectionId });
+}
 export async function listSiteTokens(
   connectionId: string,
 ): Promise<SiteToken[]> {

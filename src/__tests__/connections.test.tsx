@@ -14,6 +14,7 @@ import HomePage from "@/pages/home";
 import KeysPage from "@/pages/keys";
 import ToolDetailPage from "@/pages/tool-detail";
 import DiagnosePage from "@/pages/diagnose";
+import ShopPage from "@/pages/shop";
 import { RebindDialog } from "@/components/rebind-dialog";
 import { PreferencesProvider } from "@/lib/preferences";
 import type {
@@ -167,9 +168,13 @@ beforeEach(() => {
       );
       return null;
     }
+    if (command === "connection_shop_url")
+      return "https://pay.ldxp.cn/shop/test";
+    if (command === "open_connection_shop") return undefined;
     if (command === "connection_profile")
       return {
         connectionId: args.connectionId,
+        shopUrl: "https://pay.ldxp.cn/shop/test",
         provider: "newapi",
         kind: "kuncode_authorized",
         siteUrl: official.siteUrl,
@@ -587,7 +592,10 @@ it("首页 Dashboard 展示账户余额与工具配置进度", async () => {
   render(
     <AppProvider>
       <MemoryRouter>
-        <HomePage />
+        <Routes>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/shop/:connectionId" element={<ShopPage />} />
+        </Routes>
       </MemoryRouter>
     </AppProvider>,
   );
@@ -596,6 +604,95 @@ it("首页 Dashboard 展示账户余额与工具配置进度", async () => {
   expect(screen.getByText("工具配置")).toBeInTheDocument();
   expect(screen.getByText("1 / 3")).toBeInTheDocument();
   expect(screen.getByText("1 个工具已配置")).toBeInTheDocument();
+  await userEvent
+    .setup()
+    .click(screen.getByRole("button", { name: "去小铺充值" }));
+  expect(await screen.findByTitle("小铺")).toHaveAttribute(
+    "src",
+    "https://pay.ldxp.cn/shop/test",
+  );
+  expect(native.invoke).toHaveBeenCalledWith("connection_shop_url", {
+    connectionId: official.id,
+  });
+  expect(native.invoke).not.toHaveBeenCalledWith(
+    "open_connection_shop",
+    expect.anything(),
+  );
+  await userEvent
+    .setup()
+    .click(screen.getByRole("button", { name: "在浏览器打开" }));
+  expect(native.invoke).toHaveBeenCalledWith("open_connection_shop", {
+    connectionId: official.id,
+  });
+  await userEvent.setup().click(screen.getByRole("button", { name: "返回" }));
+  expect(await screen.findByText("$12.50")).toBeInTheDocument();
+});
+
+it("小铺刷新读取新地址，后台清空地址后显示错误并支持重试", async () => {
+  const base = native.invoke.getMockImplementation();
+  let shopUrl: string | null = "https://shop.example/first";
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === "connection_shop_url") {
+      if (!shopUrl)
+        throw { message: "站点未配置有效的小铺地址，请刷新账户信息" };
+      return shopUrl;
+    }
+    return base!(command, args);
+  });
+  render(
+    <MemoryRouter initialEntries={["/shop/other-connection"]}>
+      <Routes>
+        <Route path="/shop/:connectionId" element={<ShopPage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  const user = userEvent.setup();
+  expect(await screen.findByTitle("小铺")).toHaveAttribute("src", shopUrl);
+  shopUrl = "https://shop.example/current";
+  await user.click(screen.getByRole("button", { name: "刷新小铺" }));
+  await waitFor(() =>
+    expect(screen.getByTitle("小铺")).toHaveAttribute("src", shopUrl),
+  );
+  shopUrl = null;
+  await user.click(screen.getByRole("button", { name: "刷新小铺" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "站点未配置有效的小铺地址",
+  );
+  expect(screen.queryByTitle("小铺")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "在浏览器打开" })).toBeDisabled();
+  shopUrl = "https://shop.example/restored";
+  await user.click(screen.getByRole("button", { name: "刷新小铺" }));
+  expect(await screen.findByTitle("小铺")).toHaveAttribute("src", shopUrl);
+  expect(native.invoke).toHaveBeenCalledWith("connection_shop_url", {
+    connectionId: "other-connection",
+  });
+});
+
+it("服务端清空小铺地址后刷新账户隐藏充值入口，余额保持可见", async () => {
+  snapshot.connections.push(official);
+  snapshot.currentOfficial = official.id;
+  const base = native.invoke.getMockImplementation();
+  let shopUrl: string | null = "https://pay.ldxp.cn/shop/test";
+  native.invoke.mockImplementation(async (command, args) => {
+    const result = await base!(command, args);
+    return command === "connection_profile" ? { ...result, shopUrl } : result;
+  });
+  render(
+    <AppProvider>
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>
+    </AppProvider>,
+  );
+  await screen.findByRole("button", { name: "去小铺充值" });
+  shopUrl = null;
+  await userEvent.setup().click(screen.getByRole("button", { name: "刷新" }));
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("button", { name: "去小铺充值" }),
+    ).not.toBeInTheDocument(),
+  );
+  expect(screen.getByText("$12.50")).toBeInTheDocument();
 });
 
 it("首页对低额度账户给出预警", async () => {
@@ -910,11 +1007,13 @@ it("账户菜单展示站点真实用户信息而不是跳转设置", async () =
   snapshot.currentOfficial = official.id;
   render(
     <AppProvider>
-      <AccountPanel
-        open
-        onOpenChange={() => undefined}
-        onLogin={() => undefined}
-      />
+      <MemoryRouter>
+        <AccountPanel
+          open
+          onOpenChange={() => undefined}
+          onLogin={() => undefined}
+        />
+      </MemoryRouter>
     </AppProvider>,
   );
   expect(await screen.findByText("Owner")).toBeInTheDocument();
@@ -972,6 +1071,7 @@ it("手动用户 Token 连接也能在账户面板展示资料", async () => {
     if (command === "connection_profile")
       return {
         connectionId: args.connectionId,
+        shopUrl: "https://other.example/shop",
         provider: "newapi",
         kind: "newapi_pat",
         siteUrl: manual.siteUrl,
@@ -998,11 +1098,21 @@ it("手动用户 Token 连接也能在账户面板展示资料", async () => {
   });
   render(
     <AppProvider>
-      <AccountPanel
-        open
-        onOpenChange={() => undefined}
-        onLogin={() => undefined}
-      />
+      <MemoryRouter>
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <AccountPanel
+                open
+                onOpenChange={() => undefined}
+                onLogin={() => undefined}
+              />
+            }
+          />
+          <Route path="/shop/:connectionId" element={<div>手动账户小铺</div>} />
+        </Routes>
+      </MemoryRouter>
     </AppProvider>,
   );
   expect(await screen.findByText("Manual Owner")).toBeInTheDocument();
@@ -1010,6 +1120,14 @@ it("手动用户 Token 连接也能在账户面板展示资料", async () => {
     connectionId: manual.id,
   });
   expect(screen.queryByText("尚未登录 KunCode")).not.toBeInTheDocument();
+  await userEvent
+    .setup()
+    .click(screen.getByRole("button", { name: "去小铺充值" }));
+  expect(await screen.findByText("手动账户小铺")).toBeInTheDocument();
+  expect(native.invoke).not.toHaveBeenCalledWith(
+    "open_connection_shop",
+    expect.anything(),
+  );
 });
 
 it("API Key 连接不显示为已登录账户", async () => {
@@ -1048,26 +1166,33 @@ it("API Key 连接不显示为已登录账户", async () => {
   });
   render(
     <AppProvider>
-      <AccountPanel
-        open
-        onOpenChange={() => undefined}
-        onLogin={() => undefined}
-      />
+      <MemoryRouter>
+        <AccountPanel
+          open
+          onOpenChange={() => undefined}
+          onLogin={() => undefined}
+        />
+      </MemoryRouter>
     </AppProvider>,
   );
   expect(await screen.findByText("模型服务")).toBeInTheDocument();
   expect(screen.getByText("模型服务连接")).toBeInTheDocument();
   expect(screen.queryByText("尚未登录 KunCode")).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "去小铺充值" }),
+  ).not.toBeInTheDocument();
 });
 
 it("未登录时账户面板提供登录入口", async () => {
   render(
     <AppProvider>
-      <AccountPanel
-        open
-        onOpenChange={() => undefined}
-        onLogin={() => undefined}
-      />
+      <MemoryRouter>
+        <AccountPanel
+          open
+          onOpenChange={() => undefined}
+          onLogin={() => undefined}
+        />
+      </MemoryRouter>
     </AppProvider>,
   );
   expect(await screen.findByText("尚未登录 KunCode")).toBeInTheDocument();

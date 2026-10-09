@@ -103,6 +103,32 @@ async fn connection_profile(
     blocking(move || service.profile(&connection_id)).await
 }
 #[tauri::command]
+async fn connection_shop_url(
+    service: State<'_, Arc<ConnectionService>>,
+    connection_id: String,
+) -> Result<String, ErrorPayload> {
+    let service = service.inner().clone();
+    blocking(move || service.shop_url(&connection_id)).await
+}
+
+#[tauri::command]
+async fn open_connection_shop(
+    app: tauri::AppHandle,
+    service: State<'_, Arc<ConnectionService>>,
+    connection_id: String,
+) -> Result<(), ErrorPayload> {
+    use tauri_plugin_opener::OpenerExt;
+    let service = service.inner().clone();
+    blocking(move || {
+        let url = service.shop_url(&connection_id)?;
+        app.opener()
+            .open_url(url, None::<&str>)
+            .map_err(|_| AppError::Other("无法打开小铺，请检查系统默认浏览器".into()))
+    })
+    .await
+}
+
+#[tauri::command]
 async fn logout_connection(
     service: State<'_, Arc<ConnectionService>>,
     connection_id: String,
@@ -316,6 +342,8 @@ pub fn run() {
             import_connection,
             connection_models,
             connection_profile,
+            open_connection_shop,
+            connection_shop_url,
             logout_connection,
             list_site_tokens,
             site_groups,

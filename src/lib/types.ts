@@ -206,6 +206,7 @@ export interface ToolDetail {
 }
 export interface AccountProfile {
   connectionId: string;
+  shopUrl?: string | null;
   /** 站点类型；newapi 为当前实现，sub2api 等可复用同一契约 */
   provider: string;
   kind: ConnectionKind;

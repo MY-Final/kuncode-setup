@@ -8,6 +8,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ShopButton } from "@/components/shop-button";
 import { useApp } from "@/lib/store";
 import * as api from "@/lib/tauri/api";
 import { errorMessage } from "@/lib/utils";
@@ -60,6 +61,7 @@ export function Dashboard() {
       return;
     }
     let active = true;
+    setProfile(null);
     setLoading(true);
     setError(null);
     api
@@ -122,7 +124,10 @@ export function Dashboard() {
           <p className="dashboard-muted">正在读取…</p>
         ) : balance ? (
           <>
-            <strong className="dashboard-value">{balance}</strong>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <strong className="dashboard-value">{balance}</strong>
+              {profile && <ShopButton profile={profile} />}
+            </div>
             {profile?.usedQuota != null && (
               <span className="dashboard-sub">
                 已用 {formatBalance(profile, profile.usedQuota)}

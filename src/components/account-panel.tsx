@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { ShopButton } from "@/components/shop-button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { useApp } from "@/lib/store";
@@ -89,6 +90,7 @@ export function AccountPanel({
       return;
     }
     let active = true;
+    setProfile(null);
     setLoading(true);
     setError(null);
     api
@@ -252,6 +254,12 @@ export function AccountPanel({
             )}
 
             <div className="account-actions">
+              {!error && profile && (
+                <ShopButton
+                  profile={profile}
+                  onNavigate={() => onOpenChange(false)}
+                />
+              )}
               <Button
                 variant="ghost"
                 size="sm"

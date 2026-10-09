@@ -30,6 +30,27 @@ fn rejects_remote_http_and_credentials_in_urls() {
 }
 
 #[test]
+fn shop_link_uses_site_configuration_and_rejects_non_web_urls() {
+    assert_eq!(
+        shop_url_from_status(
+            &json!({"liandong_shop_url": " https://pay.ldxp.cn/shop/test?source=desktop "})
+        ),
+        Some("https://pay.ldxp.cn/shop/test?source=desktop".into())
+    );
+    for value in [
+        "",
+        "/shop",
+        "javascript:alert(1)",
+        "file:///C:/test",
+        "https://user:pass@example.com/shop",
+    ] {
+        assert!(shop_url_from_status(&json!({"liandong_shop_url": value})).is_none());
+    }
+    assert!(shop_url_from_status(&json!({})).is_none());
+    assert!(shop_url_from_status(&json!({"liandong_shop_url": 123})).is_none());
+}
+
+#[test]
 fn callback_requires_exact_state_path_and_single_code() {
     let state = "s".repeat(43);
     let code = "c".repeat(43);
@@ -569,33 +590,47 @@ fn quota_conversion_matches_site_display_settings() {
 #[test]
 fn desktop_profile_parses_stable_account_contract() {
     let _keyring = keyring_lock();
-    let (site, server) = serve(vec![(
-        200,
-        json!({
-            "success": true,
-            "data": {
-                "provider": "newapi",
-                "user": {
-                    "id": 42,
-                    "username": "owner",
-                    "display_name": "Owner Name",
-                    "email": "owner@example.com",
-                    "group": "default",
-                    "role": 1,
-                    "status": 1,
-                    "request_count": 12,
-                    "created_at": 1700000000
-                },
-                "quota": {
-                    "display_type": "USD",
-                    "symbol": "$",
-                    "balance": 3.5,
-                    "used": 1.25
-                },
-                "quota_per_unit": 500000
-            }
-        }),
-    )]);
+    let (site, server) = serve(vec![
+        (
+            200,
+            json!({
+                "success": true,
+                "data": {
+                    "provider": "newapi",
+                    "user": {
+                        "id": 42,
+                        "username": "owner",
+                        "display_name": "Owner Name",
+                        "email": "owner@example.com",
+                        "group": "default",
+                        "role": 1,
+                        "status": 1,
+                        "request_count": 12,
+                        "created_at": 1700000000
+                    },
+                    "quota": {
+                        "display_type": "USD",
+                        "symbol": "$",
+                        "balance": 3.5,
+                        "used": 1.25
+                    },
+                    "quota_per_unit": 500000
+                }
+            }),
+        ),
+        (
+            200,
+            json!({"success": true, "data": {"liandong_shop_url": "https://pay.ldxp.cn/shop/old"}}),
+        ),
+        (
+            200,
+            json!({"success": true, "data": {"liandong_shop_url": "https://pay.ldxp.cn/shop/current"}}),
+        ),
+        (
+            200,
+            json!({"success": true, "data": {"liandong_shop_url": ""}}),
+        ),
+    ]);
     let directory = std::env::temp_dir().join(format!("kuncode-profile-test-{}", Uuid::new_v4()));
     let service = ConnectionService::new(directory.clone()).unwrap();
     let connection = ConnectionSummary {
@@ -626,8 +661,22 @@ fn desktop_profile_parses_stable_account_contract() {
     assert_eq!(profile.request_count, Some(12));
     assert_eq!(profile.member_since, Some(1700000000));
     assert_eq!(
+        profile.shop_url.as_deref(),
+        Some("https://pay.ldxp.cn/shop/old")
+    );
+    assert_eq!(
+        service.shop_url(&connection.id).unwrap(),
+        "https://pay.ldxp.cn/shop/current"
+    );
+    assert!(service.shop_url(&connection.id).is_err());
+    assert_eq!(
         server.join().unwrap(),
-        ["GET /api/desktop/profile HTTP/1.1"]
+        [
+            "GET /api/desktop/profile HTTP/1.1",
+            "GET /api/status HTTP/1.1",
+            "GET /api/status HTTP/1.1",
+            "GET /api/status HTTP/1.1",
+        ]
     );
     std::fs::remove_dir_all(directory).unwrap();
 }
