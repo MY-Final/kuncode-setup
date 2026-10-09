@@ -1,6 +1,6 @@
 [package]
 name = "kuncode-setup"
-version = "0.1.1"
+version = "0.1.2"
 description = "KunCode Setup — AI Coding Agent 配置助手"
 authors = ["KunCode"]
 edition = "2021"

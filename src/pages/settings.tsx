@@ -354,7 +354,7 @@ export default function SettingsPage() {
             <h3>KunCode Setup</h3>
             <p>Windows Coding Agent 配置工具</p>
           </div>
-          <span className="version-text">v0.1.1</span>
+          <span className="version-text">v0.1.2</span>
         </div>
       </section>
     </div>
