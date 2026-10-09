@@ -5,7 +5,7 @@ use std::sync::{Mutex, MutexGuard};
 // threads; tests that touch keyring entries take this shared lock.
 static KEYRING_LOCK: Mutex<()> = Mutex::new(());
 
-fn keyring_lock() -> MutexGuard<'static, ()> {
+pub(super) fn keyring_lock() -> MutexGuard<'static, ()> {
     KEYRING_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -102,7 +102,7 @@ fn claude_receives_root_and_other_tools_receive_v1() {
     );
 }
 
-fn serve(
+pub(super) fn serve(
     responses: Vec<(u16, serde_json::Value)>,
 ) -> (String, std::thread::JoinHandle<Vec<String>>) {
     use std::io::{Read, Write};
@@ -308,6 +308,7 @@ fn persisted_connections_restore_bindings_and_expiry_does_not_damage_tools() {
                 token_id: Some(7),
                 status: "ready".into(),
                 verified: true,
+                inference_verified: false,
             },
         );
         service.save(&state).unwrap();
@@ -343,6 +344,7 @@ fn authorization_destination_survives_restart_without_rebinding_tools() {
                 token_id: Some(7),
                 status: "ready".into(),
                 verified: true,
+                inference_verified: false,
             },
         );
     }
@@ -500,6 +502,7 @@ fn manual_logout_removes_only_local_login_and_preserves_tool_credentials() {
             token_id: Some(7),
             status: "ready".into(),
             verified: true,
+            inference_verified: false,
         })
         .unwrap();
     assert!(service.logout(&connection.id).unwrap().is_none());
@@ -659,4 +662,78 @@ fn config_views_mask_nested_login_tokens_custom_credentials_and_malformed_text()
     let toml = "[env]\nCUSTOM_TOKEN = \"token-without-prefix\"\nMODEL = \"visible-model\"\n";
     let masked = super::mask_config_text(toml, "");
     assert!(!masked.contains("token-without-prefix") && masked.contains("visible-model"));
+}
+
+#[test]
+fn a_readable_model_list_must_contain_every_selected_model() {
+    let available = vec!["default".into()];
+    assert!(super::verify_selected_models(&available, &["default".into()]).is_ok());
+    assert!(super::verify_selected_models(&available, &["missing".into()]).is_err());
+    assert!(
+        super::verify_selected_models(&available, &["default".into(), "missing".into()]).is_err()
+    );
+    assert!(super::verify_selected_models(&[], &["default".into()]).is_err());
+}
+
+#[test]
+fn automatic_manual_key_preparation_survives_restart_without_recreating_or_rebinding() {
+    let _lock = keyring_lock();
+    let (site, server) = serve(vec![
+        (
+            200,
+            json!({"success":true,"data":{"id":71,"key":"sk-staged-test-secret"}}),
+        ),
+        (200, json!({"data":[{"id":"test-model"}]})),
+    ]);
+    let dir = std::env::temp_dir().join(format!("kuncode-staged-test-{}", Uuid::new_v4()));
+    let service = ConnectionService::new(dir.clone()).unwrap();
+    let connection = ConnectionSummary {
+        id: Uuid::new_v4().to_string(),
+        kind: ConnectionKind::NewapiPat,
+        site_url: site.clone(),
+        api_base_url: format!("{site}/v1"),
+        account: None,
+        alias: None,
+        note: None,
+        user_id: Some(1),
+        legacy_user_id: Some(1),
+        expires_at: None,
+        connected: true,
+        verified: true,
+    };
+    service
+        .store_connection(connection.clone(), "management-test-secret")
+        .unwrap();
+    let selection = ApplySelection {
+        model: "test-model".into(),
+        models: vec![],
+        token_id: None,
+        group: None,
+        rebuild: false,
+    };
+    let first = service
+        .prepare_tool_key(&connection, "codex", &selection)
+        .unwrap();
+    assert!(service.snapshot().unwrap().bindings.is_empty());
+    assert!(vault::get_optional(&connection.tool_reference("codex"))
+        .unwrap()
+        .is_none());
+    let restarted = ConnectionService::new(dir.clone()).unwrap();
+    let second = restarted
+        .prepare_tool_key(&connection, "codex", &selection)
+        .unwrap();
+    assert_eq!(first, second);
+    assert_eq!(
+        server.join().unwrap(),
+        ["POST /api/token/ HTTP/1.1", "GET /v1/models HTTP/1.1"]
+    );
+    let reference = connection.tool_reference("codex");
+    vault::delete(&vault::reference(
+        "prepared",
+        &reference,
+        &connection.api_base_url,
+    ))
+    .unwrap();
+    vault::delete(&connection.credential_reference()).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
 }

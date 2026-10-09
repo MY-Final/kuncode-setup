@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super::model::{mask_api_key, AgentConfig, ConfigPreview};
 use super::provider::AgentProvider;
-use crate::config::{atomic_write, backup_file};
+use crate::config::{atomic_write, read_json_object, read_toml_table};
 use crate::env::{detect_cli, ToolStatus};
 use crate::error::AppResult;
 
@@ -58,7 +58,7 @@ impl AgentProvider for CodexProvider {
             config_path: path.map(|p| p.to_string_lossy().to_string()),
             existing_config: existing,
             backup_path: if existing {
-                backup.map(|p| p.to_string_lossy().to_string())
+                backup.map(|p| format!("{}.<批次>", p.display()))
             } else {
                 None
             },
@@ -68,16 +68,6 @@ impl AgentProvider for CodexProvider {
                 "保存 API Key 到 Codex 凭据文件".to_string(),
             ],
         })
-    }
-
-    fn backup(&self) -> AppResult<Option<PathBuf>> {
-        if let Some(dir) = self.home_dir() {
-            backup_file(&dir.join("auth.json"))?;
-        }
-        match self.config_path() {
-            Some(path) => backup_file(&path),
-            None => Ok(None),
-        }
     }
 
     fn configure(&self, config: &AgentConfig) -> AppResult<()> {
@@ -134,15 +124,8 @@ impl AgentProvider for CodexProvider {
 
 pub(super) fn write_configuration(dir: &std::path::Path, config: &AgentConfig) -> AppResult<()> {
     let path = dir.join("config.toml");
-    let mut value: toml::Value = match std::fs::read_to_string(&path) {
-        Ok(text) => {
-            toml::from_str(&text).unwrap_or_else(|_| toml::Value::Table(Default::default()))
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            toml::Value::Table(Default::default())
-        }
-        Err(error) => return Err(error.into()),
-    };
+    let mut value = read_toml_table(&path)?;
+    let mut auth = read_json_object(&dir.join("auth.json"))?;
     let table = value
         .as_table_mut()
         .ok_or_else(|| crate::error::AppError::Parse("Codex 配置不是对象".into()))?;
@@ -170,6 +153,11 @@ pub(super) fn write_configuration(dir: &std::path::Path, config: &AgentConfig) -
     let profiles = profiles
         .as_table_mut()
         .ok_or_else(|| crate::error::AppError::Parse("Codex profiles 配置损坏".into()))?;
+    profiles.retain(|name, _| {
+        !name
+            .strip_prefix("kuncode-")
+            .is_some_and(|suffix| suffix.parse::<usize>().is_ok())
+    });
     for (index, model) in models.iter().enumerate() {
         let mut profile = toml::Table::new();
         profile.insert("model".into(), model.clone().into());
@@ -182,21 +170,13 @@ pub(super) fn write_configuration(dir: &std::path::Path, config: &AgentConfig) -
     let body = toml::to_string_pretty(&value)
         .map_err(|_| crate::error::AppError::Parse("无法生成 Codex 配置".into()))?;
     atomic_write(&path, &body)?;
-    merge_auth_key(&dir.join("auth.json"), &config.api_key)
-}
-
-/// Merges the API key into `auth.json` without dropping other keys, so an
-/// existing ChatGPT login (`tokens`) is preserved.
-fn merge_auth_key(path: &std::path::Path, api_key: &str) -> AppResult<()> {
-    let mut value: serde_json::Value = match std::fs::read_to_string(path) {
-        Ok(text) if !text.trim().is_empty() => {
-            serde_json::from_str(&text).unwrap_or_else(|_| json!({}))
-        }
-        _ => json!({}),
-    };
-    let object = value
+    // Preserve existing login fields, but never send their values to React.
+    let object = auth
         .as_object_mut()
         .ok_or_else(|| crate::error::AppError::Parse("auth.json 不是对象".into()))?;
-    object.insert("OPENAI_API_KEY".into(), json!(api_key));
-    atomic_write(path, &serde_json::to_string_pretty(&value)?)
+    object.insert("OPENAI_API_KEY".into(), json!(config.api_key));
+    atomic_write(
+        &dir.join("auth.json"),
+        &serde_json::to_string_pretty(&auth)?,
+    )
 }

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use super::model::{mask_api_key, AgentConfig, ConfigPreview};
 use super::provider::AgentProvider;
-use crate::config::{atomic_write, backup_file};
+use crate::config::{atomic_write, read_json_object};
 use crate::env::{detect_cli, ToolStatus};
 use crate::error::AppResult;
 
@@ -56,7 +56,7 @@ impl AgentProvider for ClaudeCodeProvider {
             config_path: path.map(|p| p.to_string_lossy().to_string()),
             existing_config: existing,
             backup_path: if existing {
-                backup.map(|p| p.to_string_lossy().to_string())
+                backup.map(|p| format!("{}.<批次>", p.display()))
             } else {
                 None
             },
@@ -77,13 +77,6 @@ impl AgentProvider for ClaudeCodeProvider {
                 changes
             },
         })
-    }
-
-    fn backup(&self) -> AppResult<Option<PathBuf>> {
-        match self.config_path() {
-            Some(path) => backup_file(&path),
-            None => Ok(None),
-        }
     }
 
     fn configure(&self, config: &AgentConfig) -> AppResult<()> {
@@ -125,12 +118,7 @@ impl AgentProvider for ClaudeCodeProvider {
 }
 
 pub(super) fn write_configuration(path: &std::path::Path, config: &AgentConfig) -> AppResult<()> {
-    let mut value: serde_json::Value = match std::fs::read_to_string(path) {
-        Ok(text) if !text.trim().is_empty() => {
-            serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({}))
-        }
-        _ => serde_json::json!({}),
-    };
+    let mut value = read_json_object(path)?;
 
     let obj = value
         .as_object_mut()
@@ -138,7 +126,9 @@ pub(super) fn write_configuration(path: &std::path::Path, config: &AgentConfig) 
 
     let env = obj.entry("env").or_insert_with(|| serde_json::json!({}));
     if !env.is_object() {
-        *env = serde_json::json!({});
+        return Err(crate::error::AppError::Parse(
+            "settings.json 的 env 必须是对象，原文件未修改".into(),
+        ));
     }
     let env = env.as_object_mut().unwrap();
     env.insert(

@@ -1,3 +1,4 @@
+mod configuration;
 pub mod http;
 pub mod login;
 #[cfg(test)]
@@ -98,9 +99,11 @@ pub struct ToolBinding {
     pub token_id: Option<i64>,
     pub status: String,
     pub verified: bool,
+    #[serde(default)]
+    pub inference_verified: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalState {
     pub installation_id: String,
@@ -112,6 +115,10 @@ pub struct LocalState {
     pub tool_keys: HashMap<String, Option<i64>>,
     #[serde(default)]
     pub pending_keys: HashMap<String, String>,
+    #[serde(default)]
+    pub prepared_keys: HashMap<String, i64>,
+    #[serde(default)]
+    pub backups: HashMap<String, Vec<configuration::ToolBackup>>,
 }
 
 fn default_authorization_site() -> String {
@@ -128,6 +135,8 @@ impl Default for LocalState {
             bindings: HashMap::new(),
             tool_keys: HashMap::new(),
             pending_keys: HashMap::new(),
+            prepared_keys: HashMap::new(),
+            backups: HashMap::new(),
         }
     }
 }
@@ -189,6 +198,8 @@ pub struct ApplySelection {
     pub token_id: Option<i64>,
     #[serde(default)]
     pub group: Option<String>,
+    #[serde(default)]
+    pub rebuild: bool,
 }
 
 pub struct ConnectionService {
@@ -233,6 +244,7 @@ pub struct RestoreOutcome {
     pub restored: Vec<String>,
     /// 没有找到备份、保持原样的配置文件路径。
     pub missing: Vec<String>,
+    pub removed: Vec<String>,
 }
 
 /// 启动前一致性校验结果。
@@ -296,6 +308,7 @@ pub struct ToolDetail {
     pub token_id: Option<i64>,
     pub status: String,
     pub verified: bool,
+    pub inference_verified: bool,
     pub config_paths: Vec<String>,
     pub config_files: Vec<ConfigFileView>,
 }
@@ -839,17 +852,13 @@ impl ConnectionService {
         selection: ApplySelection,
         progress: Option<&Channel<ConnectionStep>>,
     ) -> AppResult<ConfigurationOutcome> {
-        let model = selection.model.as_str();
-        let models = selection.models;
-        let token_id = selection.token_id;
-        let group = selection.group;
         let _operation = self
             .operation
             .try_lock()
             .map_err(|_| AppError::Other("另一个配置正在进行，请稍后再试".into()))?;
         let connection = self.connection(id)?;
         let provider = crate::agent::get(agent)?;
-        agent_config(&connection, agent, model, &models, "")?;
+        let mut config = agent_config(&connection, agent, &selection.model, &selection.models, "")?;
         if !connection.connected
             || connection
                 .expires_at
@@ -859,306 +868,262 @@ impl ConnectionService {
                 "此连接需要重新登录；已配置的工具仍可启动".into(),
             ));
         }
-        if connection.kind != ConnectionKind::ApiKey
-            && !self.models(id)?.iter().any(|item| item == model)
-        {
-            return Err(AppError::Other("请选择此账户实际支持的模型".into()));
-        }
         if !provider.detect().installed {
             return Err(AppError::NotFound(format!(
                 "{}，请到系统诊断检查安装状态",
                 provider.name()
             )));
         }
-        let mut steps = Vec::new();
-        let mut emit = |step: &str, status: &str, detail: Option<String>| {
-            let result = ConnectionStep {
-                step: step.into(),
-                status: status.into(),
-                detail,
+        // Parse every existing file before any remote creation or local mutation.
+        if !selection.rebuild {
+            provider.validate_existing()?;
+        }
+        if connection.kind != ConnectionKind::ApiKey {
+            let available = match selection.group.as_deref().filter(|group| !group.is_empty()) {
+                Some(group) => self.site_group_models(id, group)?,
+                None => self.models(id)?,
             };
-            if let Some(channel) = progress {
-                let _ = channel.send(result.clone());
+            verify_selected_models(&available, &config.effective_models())?;
+        }
+        let remote = self.capture_remote_tool(&connection, agent, selection.token_id)?;
+        let operation = (|| {
+            let mut steps = Vec::new();
+            let mut emit = |step: &str, status: &str, detail: Option<String>| {
+                let result = ConnectionStep {
+                    step: step.into(),
+                    status: status.into(),
+                    detail,
+                };
+                if let Some(channel) = progress {
+                    let _ = channel.send(result.clone());
+                }
+                steps.push(result);
+            };
+            emit("检查环境", "complete", None);
+            let (token_id, key) = self.prepare_tool_key(&connection, agent, &selection)?;
+            config.api_key = key;
+            emit("准备工具凭据", "complete", None);
+            let check = SiteClient::new()?.models(
+                &connection.api_base_url,
+                &config.api_key,
+                None,
+                false,
+                None,
+            );
+            let (verified, notice) = match check {
+                Ok(available) => {
+                    verify_selected_models(&available, &config.effective_models())?;
+                    (true, None)
+                }
+                Err(error @ (AppError::Auth(_) | AppError::Permission(_))) => return Err(error),
+                Err(AppError::Unsupported(_)) => (
+                    false,
+                    Some("站点不提供模型列表；配置将保存，实际调用尚未验证".into()),
+                ),
+                Err(_) => (
+                    false,
+                    Some("暂时无法检查模型列表；配置将保存，可以稍后重试".into()),
+                ),
+            };
+            let binding = ToolBinding {
+                agent_id: agent.into(),
+                connection_id: id.into(),
+                model: config.model.clone(),
+                models: config.effective_models(),
+                group: selection.group.filter(|group| !group.is_empty()),
+                token_id,
+                status: "ready".into(),
+                verified,
+                inference_verified: false,
+            };
+            self.commit_configuration(
+                provider.as_ref(),
+                &config,
+                &connection,
+                binding.clone(),
+                selection.rebuild,
+                &mut |stage| emit(stage, "complete", None),
+            )?;
+            emit(
+                "检查服务连接",
+                if verified { "complete" } else { "warning" },
+                notice.or_else(|| {
+                    Some("所选模型均在密钥可读取的模型列表中；实际推理和 Streaming 尚未验证".into())
+                }),
+            );
+            Ok(ConfigurationOutcome { binding, steps })
+        })();
+        match operation {
+            Ok(outcome) => Ok(outcome),
+            Err(error) => {
+                if let Some(snapshot) = &remote {
+                    if let Err(compensation) =
+                        self.compensate_remote_tool(&connection, agent, snapshot)
+                    {
+                        return Err(AppError::Other(format!("{error}；{compensation}")));
+                    }
+                }
+                Err(error)
             }
-            steps.push(result);
-        };
-        emit("检查环境", "complete", None);
-        // Two paths: bind a key the user picked in the key center, or fall back
-        // to the legacy flow that issues a dedicated key per tool.
-        if let Some(selected_id) = token_id {
-            let (secret, context) = self.site_connection(&connection)?;
-            let group = group.unwrap_or_default();
-            if context.desktop {
-                let token = vault::get(&connection.credential_reference())?;
-                SiteClient::new()?.request(
+        }
+    }
+
+    fn prepare_tool_key(
+        &self,
+        connection: &ConnectionSummary,
+        agent: &str,
+        selection: &ApplySelection,
+    ) -> AppResult<(Option<i64>, String)> {
+        if connection.kind == ConnectionKind::ApiKey {
+            if selection.token_id.is_some() {
+                return Err(AppError::Other("API Key 服务连接无需选择站点密钥".into()));
+            }
+            return Ok((None, vault::get(&connection.credential_reference())?));
+        }
+        let (secret, context) = self.site_connection(connection)?;
+        let client = SiteClient::new()?;
+        if connection.kind == ConnectionKind::KuncodeAuthorized {
+            let body = match selection.token_id {
+                Some(id) => {
+                    json!({"token_id": id, "group": selection.group.as_deref().unwrap_or(""), "models": agent_config(connection, agent, &selection.model, &selection.models, "")?.effective_models()})
+                }
+                None => json!({"model": selection.model}),
+            };
+            let response = client.request(
+                reqwest::Method::PUT,
+                &format!("{}/api/desktop/tools/{agent}", connection.site_url),
+                Some(&secret),
+                None,
+                Some(body),
+            )?;
+            let data = response
+                .get("data")
+                .ok_or_else(|| AppError::Other("无法获取工具配置".into()))?;
+            let id = data
+                .get("id")
+                .and_then(Value::as_i64)
+                .filter(|id| *id > 0)
+                .ok_or_else(|| AppError::Other("无法获取工具密钥 ID".into()))?;
+            let key = data
+                .get("key")
+                .and_then(Value::as_str)
+                .filter(|key| !key.is_empty() && !key.contains('*'))
+                .ok_or_else(|| AppError::Other("无法获取工具密钥".into()))?;
+            let key = http::model_key(key)?;
+            // The issuance endpoint restricts its key to the default model.
+            // Apply the full selected model set before checking key permissions.
+            let models = agent_config(connection, agent, &selection.model, &selection.models, "")?
+                .effective_models();
+            if selection.token_id.is_none() && models.len() > 1 {
+                client.request(
                     reqwest::Method::PUT,
                     &format!("{}/api/desktop/tools/{agent}", connection.site_url),
-                    Some(&token),
+                    Some(&secret),
                     None,
-                    Some(json!({"token_id": selected_id, "group": group, "models": models})),
+                    Some(json!({"token_id": id, "group": "", "models": models})),
                 )?;
             }
-            let key = SiteClient::new()?.reveal_site_token(
+            return Ok((Some(id), key));
+        }
+        if let Some(id) = selection.token_id {
+            let key = client.reveal_site_token(
                 &SiteConnection {
                     site: &connection.site_url,
                     secret: &secret,
                     user_id: context.user_id,
                     desktop: context.desktop,
                 },
-                selected_id,
+                id,
             )?;
-            let key_reference = connection.tool_reference(agent);
-            vault::put(&key_reference, &key)?;
-            {
+            return Ok((Some(id), key));
+        }
+        let reference = connection.tool_reference(agent);
+        // Issuance bookkeeping is separate from the active tool credential.
+        // A failed configure can retry the already-created key without changing the old binding.
+        let prepared_reference = vault::reference("prepared", &reference, &connection.api_base_url);
+        let (prepared_id, active_id) = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| AppError::Other("连接状态暂不可用".into()))?;
+            (
+                state.prepared_keys.get(&reference).copied(),
+                state.tool_keys.get(&reference).copied().flatten(),
+            )
+        };
+        if let Some(id) = prepared_id.or(active_id) {
+            let cached = if prepared_id.is_some() {
+                vault::get_optional(&prepared_reference)?
+            } else {
+                vault::get_optional(&reference)?
+            };
+            let key = match cached {
+                Some(key) => key,
+                None => client.read_tool_key(&connection.site_url, &secret, context.user_id, id)?,
+            };
+            if !matches!(
+                client.models(&connection.api_base_url, &key, None, false, None),
+                Err(AppError::Auth(_) | AppError::Permission(_))
+            ) {
+                return Ok((Some(id), key));
+            }
+            // Keep the active credential untouched; only retire an invalid staged key.
+            if prepared_id.is_some() {
                 let mut state = self
                     .state
                     .lock()
                     .map_err(|_| AppError::Other("连接状态暂不可用".into()))?;
-                state
-                    .tool_keys
-                    .insert(key_reference.clone(), Some(selected_id));
-                state.pending_keys.remove(&key_reference);
-                self.save(&state)?;
+                let previous = state.clone();
+                state.prepared_keys.remove(&reference);
+                if let Err(error) = self.save(&state) {
+                    *state = previous;
+                    return Err(error);
+                }
+                vault::delete(&prepared_reference)?;
             }
-            emit("准备工具凭据", "complete", None);
-            provider.backup()?;
-            emit("备份原配置", "complete", None);
-            let originals: Vec<_> = provider
-                .configuration_paths()
-                .into_iter()
-                .map(|path| {
-                    let bytes = match std::fs::read(&path) {
-                        Ok(bytes) => Ok(Some(bytes)),
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                        Err(error) => Err(AppError::from(error)),
-                    }?;
-                    Ok((path, bytes))
-                })
-                .collect::<AppResult<Vec<_>>>()?;
-            if let Err(error) =
-                provider.configure(&agent_config(&connection, agent, model, &models, &key)?)
-            {
-                for (path, bytes) in &originals {
-                    match bytes {
-                        Some(bytes) => {
-                            std::fs::write(path, bytes)?;
-                        }
-                        None if path.exists() => {
-                            std::fs::remove_file(path)?;
-                        }
-                        _ => {}
-                    }
-                }
-                return Err(error);
-            }
-            emit("写入配置", "complete", None);
-            let mut binding = ToolBinding {
-                agent_id: agent.into(),
-                connection_id: id.into(),
-                model: model.into(),
-                models: models.clone(),
-                group: if group.is_empty() {
-                    None
-                } else {
-                    Some(group.clone())
-                },
-                token_id: Some(selected_id),
-                status: "ready".into(),
-                verified: false,
-            };
-            match SiteClient::new()?.models(&connection.api_base_url, &key, None, false, None) {
-                Ok(_) => {
-                    binding.verified = true;
-                    emit(
-                        "检查服务连接",
-                        "complete",
-                        Some("凭据可读取模型列表；未执行付费推理".into()),
-                    );
-                }
-                Err(AppError::Auth(_)) => {
-                    binding.status = "error".into();
-                    emit(
-                        "检查服务连接",
-                        "error",
-                        Some("工具密钥无效或权限不足".into()),
-                    );
-                }
-                Err(_) => {
-                    emit(
-                        "检查服务连接",
-                        "warning",
-                        Some("配置已保存，连接尚未验证；可以稍后重试".into()),
-                    );
-                }
-            }
-            self.record_binding(binding.clone())?;
-            return Ok(ConfigurationOutcome { binding, steps });
         }
-        let key_reference = connection.tool_reference(agent);
-        let mut token_id = None;
-        let key = if connection.kind == ConnectionKind::ApiKey {
-            vault::get(&connection.credential_reference())?
-        } else if connection.kind == ConnectionKind::KuncodeAuthorized {
-            let token = vault::get(&connection.credential_reference())?;
-            let response = SiteClient::new()?.request(
-                reqwest::Method::PUT,
-                &format!("{}/api/desktop/tools/{agent}", connection.site_url),
-                Some(&token),
-                None,
-                Some(json!({"model":model})),
-            )?;
-            let data = response
-                .get("data")
-                .ok_or_else(|| AppError::Other("无法获取工具配置".into()))?;
-            token_id = data.get("id").and_then(Value::as_i64);
-            data.get("key")
-                .and_then(Value::as_str)
-                .filter(|key| !key.is_empty())
-                .ok_or_else(|| AppError::Other("无法获取工具配置".into()))?
-                .to_owned()
-        } else {
-            let cached_id = self
-                .state
-                .lock()
-                .map_err(|_| AppError::Other("连接状态暂不可用".into()))?
-                .tool_keys
-                .get(&key_reference)
-                .copied()
-                .flatten();
-            let cached_key = if let Some(existing_id) = cached_id {
-                match vault::get(&key_reference) {
-                    Ok(key) => Some(key),
-                    Err(_) => {
-                        let token = vault::get(&connection.credential_reference())?;
-                        Some(SiteClient::new()?.read_tool_key(&connection.site_url, &token, connection.legacy_user_id, existing_id)
-                            .map_err(|_| AppError::Other("无法恢复已创建的工具密钥，不会重复创建；请在站点核对或改用已有 API Key".into()))?)
-                    }
-                }
-            } else {
-                None
-            };
-            let reusable = match cached_key.as_ref() {
-                Some(key) => !matches!(
-                    SiteClient::new()?.models(&connection.api_base_url, key, None, false, None),
-                    Err(AppError::Auth(_))
-                ),
-                None => false,
-            };
-            if reusable {
-                token_id = cached_id;
-                cached_key.unwrap()
-            } else {
-                let token = vault::get(&connection.credential_reference())?;
-                let (name, resume) = {
-                    let mut state = self
-                        .state
-                        .lock()
-                        .map_err(|_| AppError::Other("连接状态暂不可用".into()))?;
-                    match state.pending_keys.get(&key_reference) {
-                        Some(name) => (name.clone(), true),
-                        None => {
-                            let name = format!(
-                                "KunCode Setup-{agent}-{}",
-                                &Uuid::new_v4().simple().to_string()[..12]
-                            );
-                            state
-                                .pending_keys
-                                .insert(key_reference.clone(), name.clone());
-                            self.save(&state)?;
-                            (name, false)
-                        }
-                    }
-                };
-                let (created_id, key) = SiteClient::new()?.create_tool_key(
-                    &connection.site_url,
-                    &token,
-                    connection.legacy_user_id,
-                    &name,
-                    resume,
-                )?;
-                token_id = Some(created_id);
-                key
-            }
-        };
-        vault::put(&key_reference, &key)?;
-        {
+        let (name, resume) = {
             let mut state = self
                 .state
                 .lock()
                 .map_err(|_| AppError::Other("连接状态暂不可用".into()))?;
-            state.tool_keys.insert(key_reference.clone(), token_id);
-            state.pending_keys.remove(&key_reference);
-            self.save(&state)?;
-        }
-        emit("准备工具凭据", "complete", None);
-        provider.backup()?;
-        emit("备份原配置", "complete", None);
-        let originals: Vec<_> = provider
-            .configuration_paths()
-            .into_iter()
-            .map(|path| {
-                let bytes = match std::fs::read(&path) {
-                    Ok(bytes) => Ok(Some(bytes)),
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                    Err(error) => Err(AppError::from(error)),
-                }?;
-                Ok((path, bytes))
-            })
-            .collect::<AppResult<Vec<_>>>()?;
-        if let Err(error) =
-            provider.configure(&agent_config(&connection, agent, model, &models, &key)?)
-        {
-            for (path, bytes) in &originals {
-                match bytes {
-                    Some(bytes) => {
-                        std::fs::write(path, bytes)?;
+            match state.pending_keys.get(&reference) {
+                Some(name) => (name.clone(), true),
+                None => {
+                    let previous = state.clone();
+                    let name = format!(
+                        "KunCode Setup-{agent}-{}",
+                        &Uuid::new_v4().simple().to_string()[..12]
+                    );
+                    state.pending_keys.insert(reference.clone(), name.clone());
+                    if let Err(error) = self.save(&state) {
+                        *state = previous;
+                        return Err(error);
                     }
-                    None if path.exists() => {
-                        std::fs::remove_file(path)?;
-                    }
-                    _ => {}
+                    (name, false)
                 }
             }
+        };
+        let (id, key) = client.create_tool_key(
+            &connection.site_url,
+            &secret,
+            context.user_id,
+            &name,
+            resume,
+        )?;
+        vault::put(&prepared_reference, &key)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Other("连接状态暂不可用".into()))?;
+        let previous = state.clone();
+        state.prepared_keys.insert(reference.clone(), id);
+        state.pending_keys.remove(&reference);
+        if let Err(error) = self.save(&state) {
+            *state = previous;
             return Err(error);
         }
-        emit("写入配置", "complete", None);
-        let mut binding = ToolBinding {
-            agent_id: agent.into(),
-            connection_id: id.into(),
-            model: model.into(),
-            models: models.clone(),
-            group: None,
-            token_id,
-            status: "ready".into(),
-            verified: false,
-        };
-        match SiteClient::new()?.models(&connection.api_base_url, &key, None, false, None) {
-            Ok(_) => {
-                binding.verified = true;
-                emit(
-                    "检查服务连接",
-                    "complete",
-                    Some("凭据可读取模型列表；未执行付费推理".into()),
-                );
-            }
-            Err(AppError::Auth(_)) => {
-                binding.status = "error".into();
-                emit(
-                    "检查服务连接",
-                    "error",
-                    Some("工具密钥无效或权限不足".into()),
-                );
-            }
-            Err(_) => {
-                emit(
-                    "检查服务连接",
-                    "warning",
-                    Some("配置已保存，连接尚未验证；可以稍后重试".into()),
-                );
-            }
-        }
-        self.record_binding(binding.clone())?;
-        Ok(ConfigurationOutcome { binding, steps })
+        Ok((Some(id), key))
     }
 
     fn record_binding(&self, binding: ToolBinding) -> AppResult<()> {
@@ -1166,8 +1131,13 @@ impl ConnectionService {
             .state
             .lock()
             .map_err(|_| AppError::Other("连接状态暂不可用".into()))?;
+        let previous = state.clone();
         state.bindings.insert(binding.agent_id.clone(), binding);
-        self.save(&state)
+        if let Err(error) = self.save(&state) {
+            *state = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// 修改某个连接的别名与备注，其余字段保持不变。
@@ -1268,6 +1238,7 @@ impl ConnectionService {
             token_id: binding.token_id,
             status: binding.status.clone(),
             verified: binding.verified,
+            inference_verified: binding.inference_verified,
             config_paths: provider
                 .configuration_paths()
                 .into_iter()
@@ -1311,117 +1282,54 @@ impl ConnectionService {
         }
     }
 
-    /// 启动前的一致性校验：本机配置是否仍与绑定一致，绑定密钥是否仍然有效。
-    /// 预期内的失败不会抛出异常，而是返回结构化状态，便于前端给出精确引导。
+    /// This check shares the same local/config/model validation as diagnostics.
     pub fn check_binding(&self, agent: &str) -> AppResult<BindingCheck> {
-        let binding = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Other("连接状态暂不可用".into()))?
-            .bindings
-            .get(agent)
-            .cloned()
-            .ok_or_else(|| AppError::Auth("请先配置此工具".into()))?;
-        let connection = self.connection(&binding.connection_id)?;
-        let key = match vault::get(&connection.tool_reference(agent)) {
-            Ok(key) => key,
-            Err(_) => {
-                self.mark_binding_error(agent)?;
-                return Ok(BindingCheck::rebind(
-                    agent,
-                    "工具密钥已从本机凭据中丢失，请重新换绑密钥",
-                ));
-            }
-        };
-        let matches = crate::agent::get(agent)?.configuration_matches(&agent_config(
-            &connection,
-            agent,
-            &binding.model,
-            &binding.models,
-            &key,
-        )?)?;
-        if !matches {
-            self.mark_binding_error(agent)?;
-            return Ok(BindingCheck {
+        match self.probe_binding(agent) {
+            Ok(result) if result.ok => Ok(BindingCheck::ok(agent)),
+            Ok(result) => Ok(BindingCheck {
                 agent_id: agent.into(),
                 ok: false,
-                reason: "config".into(),
+                reason: "unverified".into(),
                 needs_rebind: false,
-                message: "本机工具配置已被修改或损坏，请重新配置或恢复备份".into(),
-            });
-        }
-        match SiteClient::new()?.models(&connection.api_base_url, &key, None, false, None) {
-            Ok(_) => Ok(BindingCheck::ok(agent)),
-            Err(AppError::Unsupported(_)) => Ok(BindingCheck::ok(agent)),
-            Err(AppError::Auth(_)) => {
-                self.mark_binding_error(agent)?;
-                Ok(BindingCheck::rebind(
-                    agent,
-                    "绑定的密钥已在站点失效或被停用，请换绑其他可用密钥",
-                ))
+                message: result.message,
+            }),
+            Err(error @ (AppError::Auth(_) | AppError::Permission(_))) => {
+                Ok(BindingCheck::rebind(agent, &error.to_string()))
             }
             Err(error) => Ok(BindingCheck {
                 agent_id: agent.into(),
                 ok: false,
-                reason: "network".into(),
+                reason: match error {
+                    AppError::Parse(_) => "config",
+                    AppError::Unsupported(_) => "model",
+                    _ => "network",
+                }
+                .into(),
                 needs_rebind: false,
-                message: format!("暂时无法确认连接状态：{error}"),
+                message: error.to_string(),
             }),
         }
     }
 
-    fn mark_binding_error(&self, agent: &str) -> AppResult<()> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Other("连接状态暂不可用".into()))?;
-        if let Some(binding) = state.bindings.get_mut(agent) {
-            binding.status = "error".into();
-        }
-        self.save(&state)
-    }
-
-    /// 用最近一次备份恢复某个工具的原始配置，并解除本机绑定。
+    /// Restore a complete batch, including the previous binding when one existed.
     pub fn restore_agent(&self, agent: &str) -> AppResult<RestoreOutcome> {
         let _operation = self
             .operation
             .try_lock()
             .map_err(|_| AppError::Other("另一个配置正在进行，请稍后再试".into()))?;
-        let provider = crate::agent::get(agent)?;
-        let mut restored = Vec::new();
-        let mut missing = Vec::new();
-        for path in provider.configuration_paths() {
-            match crate::config::latest_backup(&path)? {
-                Some(backup) => {
-                    crate::config::restore_file(&backup, &path)?;
-                    restored.push(path.to_string_lossy().to_string());
-                }
-                None => missing.push(path.to_string_lossy().to_string()),
-            }
-        }
-        if restored.is_empty() {
-            return Err(AppError::NotFound(format!(
-                "{} 没有可恢复的备份",
-                provider.name()
-            )));
-        }
-        {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| AppError::Other("连接状态暂不可用".into()))?;
-            state.bindings.remove(agent);
-            self.save(&state)?;
-        }
-        Ok(RestoreOutcome {
-            agent_id: agent.into(),
-            restored,
-            missing,
-        })
+        self.restore_configuration(crate::agent::get(agent)?.as_ref())
     }
 
     pub fn probe_binding(&self, agent: &str) -> AppResult<TestResult> {
-        let binding = self
+        self.probe_binding_mode(agent)
+    }
+
+    fn probe_binding_mode(&self, agent: &str) -> AppResult<TestResult> {
+        let _operation = self
+            .operation
+            .try_lock()
+            .map_err(|_| AppError::Other("另一个配置或检查正在进行，请稍后再试".into()))?;
+        let mut binding = self
             .state
             .lock()
             .map_err(|_| AppError::Other("连接状态暂不可用".into()))?
@@ -1433,42 +1341,66 @@ impl ConnectionService {
         let key = match vault::get(&connection.tool_reference(agent)) {
             Ok(key) => key,
             Err(error) => {
-                let mut damaged = binding;
-                damaged.status = "error".into();
-                self.record_binding(damaged)?;
+                if matches!(error, AppError::Auth(_)) {
+                    binding.status = "error".into();
+                    binding.verified = false;
+                    binding.inference_verified = false;
+                    self.record_binding(binding)?;
+                }
                 return Err(error);
             }
         };
-        if !crate::agent::get(agent)?.configuration_matches(&agent_config(
-            &connection,
-            agent,
-            &binding.model,
-            &binding.models,
-            &key,
-        )?)? {
-            let mut damaged = binding;
-            damaged.status = "error".into();
-            self.record_binding(damaged)?;
+        let config = agent_config(&connection, agent, &binding.model, &binding.models, &key)?;
+        if !crate::agent::get(agent)?.configuration_matches(&config)? {
+            binding.status = "error".into();
+            binding.verified = false;
+            binding.inference_verified = false;
+            self.record_binding(binding)?;
             return Err(AppError::Parse("工具配置已变化或损坏，请修复配置".into()));
         }
         let started = Instant::now();
-        match SiteClient::new()?.models(&connection.api_base_url, &key, None, false, None) {
-            Ok(_) => Ok(TestResult {
-                ok: true,
-                latency_ms: Some(started.elapsed().as_millis() as u64),
-                message: "连接可读取模型列表，未执行付费推理".into(),
-            }),
-            Err(AppError::Unsupported(_)) => Ok(TestResult {
-                ok: true,
-                latency_ms: None,
-                message: "此站点不提供模型列表，实际调用尚未验证".into(),
-            }),
-            Err(error) => {
-                if matches!(error, AppError::Auth(_)) {
-                    let mut failed = binding;
-                    failed.status = "error".into();
-                    self.record_binding(failed)?;
+        let result =
+            match SiteClient::new()?.models(&connection.api_base_url, &key, None, false, None) {
+                Ok(available) => verify_selected_models(&available, &config.effective_models()),
+                Err(AppError::Unsupported(_)) => {
+                    binding.verified = false;
+                    self.record_binding(binding)?;
+                    return Ok(TestResult {
+                        ok: false,
+                        latency_ms: None,
+                        message:
+                            "此站点不提供模型列表；已配置，实际调用尚未验证，可运行实际调用测试"
+                                .into(),
+                    });
                 }
+                Err(error) => Err(error),
+            };
+        match result {
+            Ok(()) => {
+                binding.status = "ready".into();
+                binding.verified = true;
+                self.record_binding(binding)?;
+                Ok(TestResult {
+                    ok: true,
+                    latency_ms: Some(started.elapsed().as_millis() as u64),
+                    message: "所选模型列表检查已通过；实际推理和 Streaming 尚未验证".into(),
+                })
+            }
+            Err(error) => {
+                binding.verified = false;
+                if matches!(
+                    error,
+                    AppError::Auth(_) | AppError::Permission(_) | AppError::Unsupported(_)
+                ) {
+                    binding.inference_verified = false;
+                }
+                if matches!(
+                    error,
+                    AppError::Auth(_) | AppError::Permission(_) | AppError::Unsupported(_)
+                ) {
+                    binding.status = "error".into();
+                }
+                self.record_binding(binding)?;
                 Err(error)
             }
         }
@@ -1540,6 +1472,15 @@ fn mask_config_text(text: &str, secret: &str) -> String {
     "配置无法解析，为保护凭据已隐藏内容；请修复配置或恢复备份".into()
 }
 
+fn verify_selected_models(available: &[String], selected: &[String]) -> AppResult<()> {
+    if selected.iter().any(|model| !available.contains(model)) {
+        return Err(AppError::Unsupported(
+            "所选模型不在当前密钥的可用列表中，请重新选择模型或换绑密钥".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn agent_config(
     connection: &ConnectionSummary,
     agent: &str,
@@ -1547,7 +1488,10 @@ fn agent_config(
     models: &[String],
     key: &str,
 ) -> AppResult<AgentConfig> {
-    if model.trim().is_empty() || model.len() > 256 || model.contains(['\r', '\n']) {
+    if std::iter::once(model)
+        .chain(models.iter().map(String::as_str))
+        .any(|item| item.trim().is_empty() || item.len() > 256 || item.contains(['\r', '\n']))
+    {
         return Err(AppError::Other("请选择或填写有效模型".into()));
     }
     let base = if agent == "claude" {

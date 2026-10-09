@@ -1,15 +1,21 @@
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
 use chrono::Local;
 
 use crate::error::{AppError, AppResult};
 
 /// 备份时间戳，例如 20261007-153012。
+#[cfg(test)]
 pub fn timestamp() -> String {
     Local::now().format("%Y%m%d-%H%M%S-%f").to_string()
 }
 
 pub fn atomic_write(path: &Path, body: &str) -> AppResult<()> {
+    atomic_write_bytes(path, body.as_bytes())
+}
+
+pub fn atomic_write_bytes(path: &Path, body: &[u8]) -> AppResult<()> {
     ensure_parent(path)?;
     let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
     std::fs::write(&temporary, body)?;
@@ -18,6 +24,158 @@ pub fn atomic_write(path: &Path, body: &str) -> AppResult<()> {
         return Err(error.into());
     }
     Ok(())
+}
+
+/// A missing file is different from an unreadable or malformed existing file.
+pub fn read_json_object(path: &Path) -> AppResult<serde_json::Value> {
+    let value = match std::fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str(&text).map_err(|_| {
+            AppError::Parse(format!(
+                "{} 无法解析，原文件未修改；请先修复或恢复备份",
+                path.display()
+            ))
+        })?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(error) => return Err(error.into()),
+    };
+    if !value.is_object() {
+        return Err(AppError::Parse(format!(
+            "{} 必须是 JSON 对象，原文件未修改",
+            path.display()
+        )));
+    }
+    Ok(value)
+}
+
+pub fn read_toml_table(path: &Path) -> AppResult<toml::Value> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => toml::from_str(&text).map_err(|_| {
+            AppError::Parse(format!(
+                "{} 无法解析，原文件未修改；请先修复或恢复备份",
+                path.display()
+            ))
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(toml::Value::Table(Default::default()))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct BackupFile {
+    pub original: PathBuf,
+    /// None means this file did not exist before the operation.
+    pub backup: Option<PathBuf>,
+}
+
+pub struct FileSnapshot {
+    pub path: PathBuf,
+    pub bytes: Option<Vec<u8>>,
+}
+
+pub fn capture_files(paths: &[PathBuf]) -> AppResult<Vec<FileSnapshot>> {
+    paths
+        .iter()
+        .map(|path| {
+            let bytes = match std::fs::read(path) {
+                Ok(bytes) => Some(bytes),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
+            Ok(FileSnapshot {
+                path: path.clone(),
+                bytes,
+            })
+        })
+        .collect()
+}
+
+/// Prepare every member before changing any file. Rollback attempts all members.
+pub fn restore_snapshots(files: &[FileSnapshot]) -> AppResult<()> {
+    let mut failed = Vec::new();
+    for file in files {
+        let result = match &file.bytes {
+            Some(bytes) => atomic_write_bytes(&file.path, bytes),
+            None => match std::fs::remove_file(&file.path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error.into()),
+            },
+        };
+        if result.is_err() {
+            failed.push(file.path.display().to_string());
+        }
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(AppError::Io(format!(
+            "无法恢复以下文件：{}；请保留备份并重试",
+            failed.join("、")
+        )))
+    }
+}
+
+pub fn backup_snapshots(files: &[FileSnapshot]) -> AppResult<Vec<BackupFile>> {
+    let batch = uuid::Uuid::new_v4().simple().to_string();
+    let mut backups = Vec::new();
+    for file in files {
+        let backup = file.bytes.as_ref().map(|_| {
+            let mut name = file.path.as_os_str().to_os_string();
+            name.push(format!(".kuncode.bak.{batch}"));
+            PathBuf::from(name)
+        });
+        if let (Some(path), Some(bytes)) = (&backup, &file.bytes) {
+            if let Err(error) = atomic_write_bytes(path, bytes) {
+                discard_backups(&backups);
+                return Err(error);
+            }
+        }
+        backups.push(BackupFile {
+            original: file.path.clone(),
+            backup,
+        });
+    }
+    Ok(backups)
+}
+
+pub fn discard_backups(files: &[BackupFile]) {
+    for file in files {
+        if let Some(path) = &file.backup {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+pub fn load_backup_set(files: &[BackupFile], expected: &[PathBuf]) -> AppResult<Vec<FileSnapshot>> {
+    if files.len() != expected.len()
+        || !expected
+            .iter()
+            .all(|path| files.iter().filter(|file| &file.original == path).count() == 1)
+    {
+        return Err(AppError::Parse(
+            "备份清单不完整或配置路径已变化，未恢复任何文件".into(),
+        ));
+    }
+    files
+        .iter()
+        .map(|file| {
+            let bytes = match &file.backup {
+                Some(path) => Some(std::fs::read(path).map_err(|_| {
+                    AppError::Io(format!(
+                        "备份文件无法读取：{}，未恢复任何文件",
+                        path.display()
+                    ))
+                })?),
+                None => None,
+            };
+            Ok(FileSnapshot {
+                path: file.original.clone(),
+                bytes,
+            })
+        })
+        .collect()
 }
 
 /// 为某个配置文件生成备份路径：<name>.kuncode.bak
@@ -29,6 +187,7 @@ pub fn backup_path_for(path: &Path) -> PathBuf {
 
 /// 备份已存在的文件。若原文件不存在则返回 None（无需备份）。
 /// 已存在同名备份时，会自动追加时间戳避免覆盖。
+#[cfg(test)]
 pub fn backup_file(path: &Path) -> AppResult<Option<PathBuf>> {
     if !path.exists() {
         return Ok(None);
@@ -84,6 +243,7 @@ pub fn latest_backup(path: &Path) -> AppResult<Option<PathBuf>> {
 }
 
 /// 从备份恢复。
+#[cfg(test)]
 pub fn restore_file(backup: &Path, original: &Path) -> AppResult<()> {
     if !backup.exists() {
         return Err(AppError::NotFound(format!("备份文件 {}", backup.display())));

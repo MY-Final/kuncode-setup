@@ -626,7 +626,7 @@ fn site_token_from_value(row: &Value) -> SiteToken {
     }
 }
 
-fn model_key(key: &str) -> AppResult<String> {
+pub(super) fn model_key(key: &str) -> AppResult<String> {
     if key.trim().is_empty() || key.contains(['*', '•', '…', '\r', '\n']) {
         return Err(AppError::Unsupported(
             "密钥返回值不完整，请改用已有 API Key".into(),

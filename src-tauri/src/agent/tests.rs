@@ -99,3 +99,41 @@ fn command_resolution_finds_windows_shims_and_falls_back_for_unknown_names() {
         std::path::PathBuf::from("kuncode-command-that-does-not-exist")
     );
 }
+
+#[test]
+fn malformed_existing_configs_are_not_overwritten_including_codex_auth() {
+    let dir = std::env::temp_dir().join(format!("kuncode-parse-test-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = AgentConfig {
+        agent_id: "codex".into(),
+        model: "model".into(),
+        models: vec![],
+        base_url: "https://test.example/v1".into(),
+        api_key: "secret".into(),
+    };
+    let toml = dir.join("config.toml");
+    let auth = dir.join("auth.json");
+    std::fs::write(&toml, "model = \"original\"\n").unwrap();
+    std::fs::write(&auth, "{ broken auth").unwrap();
+    assert!(super::codex::write_configuration(&dir, &config).is_err());
+    assert_eq!(
+        std::fs::read_to_string(&toml).unwrap(),
+        "model = \"original\"\n"
+    );
+    assert_eq!(std::fs::read_to_string(&auth).unwrap(), "{ broken auth");
+    std::fs::write(&toml, "model = [broken").unwrap();
+    assert!(super::codex::write_configuration(&dir, &config).is_err());
+    assert_eq!(std::fs::read_to_string(&toml).unwrap(), "model = [broken");
+    let path = dir.join("settings.json");
+    for text in ["{ broken", "", "[]", "{\"env\":null}"] {
+        std::fs::write(&path, text).unwrap();
+        assert!(super::claude::write_configuration(&path, &config).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    }
+    for text in ["{ broken", "", "[]", "{\"provider\":null}"] {
+        std::fs::write(&path, text).unwrap();
+        assert!(super::opencode::write_configuration(&path, &config).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
