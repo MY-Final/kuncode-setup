@@ -191,6 +191,13 @@
 [data-slot="dialog-overlay"] {
   background: #18212b26;
 }
+[data-slot="dialog-content"] > .form-field:has(+ .setup-form-footer) {
+  margin-bottom: 0;
+}
+[data-slot="dialog-content"] .setup-form-footer {
+  margin-top: 0;
+  padding-top: 0;
+}
 [data-slot="dropdown-menu-content"],
 [data-slot="select-content"] {
   border-radius: 6px;
