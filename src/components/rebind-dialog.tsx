@@ -130,7 +130,9 @@ export function RebindDialog({
     if (pinging) return;
     setPinging(true);
     try {
-      const online = connections.filter((item) => item.connected);
+      const online = connections.filter(
+        (item) => item.connected && item.kind !== "api_key",
+      );
       const results = await Promise.all(
         online.map(async (item) => ({
           id: item.id,
@@ -166,7 +168,7 @@ export function RebindDialog({
     setBusy(true);
     setError(null);
     try {
-      await api.applyConnection(
+      const outcome = await api.applyConnection(
         connectionId,
         agent.id,
         defaultModel,
@@ -176,6 +178,19 @@ export function RebindDialog({
         selectedModels,
       );
       await refreshConnections();
+      if (outcome.binding.status !== "ready") {
+        throw new Error(
+          outcome.steps.find((step) => step.status === "error")?.detail ??
+            "密钥未通过检查，请重新选择密钥或修复配置",
+        );
+      }
+      if (!outcome.binding.verified) {
+        setError(
+          outcome.steps.find((step) => step.status === "warning")?.detail ??
+            "配置已保存，但连接尚未验证，请稍后检查",
+        );
+        return;
+      }
       onDone();
       onOpenChange(false);
     } catch (value) {
@@ -225,7 +240,7 @@ export function RebindDialog({
               disabled={pinging}
             >
               {pinging && <Loader2 className="animate-spin" />}
-              自动选择最快连接
+              选择列表响应最快的连接
             </Button>
           </div>
         )}

@@ -56,7 +56,9 @@ export default function ToolDetailPage() {
       const outcome = await api.restoreToolConfig(agentId);
       await refreshConnections();
       await refresh();
-      toast.success(`已从备份恢复 ${outcome.restored.length} 个配置文件`);
+      toast.success(
+        `已恢复上一次完整配置${outcome.removed.length ? `，移除 ${outcome.removed.length} 个新增文件` : ""}`,
+      );
       navigate("/models");
     } catch (value) {
       toast.error(errorMessage(value));
@@ -121,9 +123,11 @@ export default function ToolDetailPage() {
               >
                 {detail.status === "error"
                   ? "配置异常"
-                  : detail.verified
-                    ? "已验证"
-                    : "已配置"}
+                  : detail.inferenceVerified
+                    ? "实际调用已通过"
+                    : detail.verified
+                      ? "模型列表已检查"
+                      : "已配置 · 尚未验证"}
               </span>
             </div>
             <dl className="detail-list">

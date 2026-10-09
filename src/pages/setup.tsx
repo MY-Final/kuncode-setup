@@ -21,6 +21,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useApp } from "@/lib/store";
 import * as api from "@/lib/tauri/api";
 import { DEMO_MODELS, DEFAULT_BASE_URL } from "@/lib/data/models";
@@ -60,6 +67,7 @@ export default function SetupPage() {
   );
   const [stage, setStage] = useState<Stage>("connect");
   const [demo, setDemo] = useState(false);
+  const [automaticKey, setAutomaticKey] = useState(false);
   const [model, setModel] = useState(config?.model ?? "");
   const [models, setModels] = useState<string[]>([]);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
@@ -79,11 +87,29 @@ export default function SetupPage() {
   const [operation, setOperation] = useState<OperationState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [canRebuild, setCanRebuild] = useState(false);
+  const [rebuildOpen, setRebuildOpen] = useState(false);
   const applying = useRef(false);
   const navigate = useNavigate();
   const selected = connections.find(
     (connection) => connection.id === connectionId,
   );
+  useEffect(() => {
+    if (!connectionId) {
+      const online = connections.filter((item) => item.connected);
+      if (online.length === 1) setConnectionId(online[0].id);
+    }
+  }, [connections, connectionId]);
+  function startAutomatic() {
+    setDemo(false);
+    setAutomaticKey(selected?.kind !== "api_key");
+    setTokenId(null);
+    setGroup("");
+    setModel("");
+    setSelectedModels([]);
+    setError(null);
+    setStage("model");
+  }
   useEffect(() => {
     document.getElementById("main-content")?.scrollTo(0, 0);
   }, [stage]);
@@ -164,7 +190,9 @@ export default function SetupPage() {
           );
         }
         if (!values.length)
-          setKeyNotice("这个账户还没有密钥，可以先到「密钥与分组」新建一个。");
+          setKeyNotice(
+            "这个账户还没有密钥，可以自动创建专用密钥，也可以到「密钥与分组」新建。",
+          );
       })
       .catch((value: unknown) => {
         if (active) setError(errorMessage(value));
@@ -198,7 +226,17 @@ export default function SetupPage() {
             model.trim(),
             effectiveModels,
           );
-      setPreview(result);
+      setPreview(
+        automaticKey
+          ? {
+              ...result,
+              changes: [
+                "确认后自动创建或复用此工具的专用密钥，使用账户默认分组",
+                ...result.changes,
+              ],
+            }
+          : result,
+      );
       setDraft({ agentId, model: model.trim(), connectionId, demo });
       setStage("preview");
     } catch (value) {
@@ -207,9 +245,10 @@ export default function SetupPage() {
       setBusy(false);
     }
   }
-  async function apply() {
+  async function apply(rebuild = false) {
     if (applying.current || (!demo && !agent?.installed)) return;
     applying.current = true;
+    setCanRebuild(false);
     const state: OperationState = {
       title: `正在配置 ${agent?.name}`,
       description: demo
@@ -261,6 +300,7 @@ export default function SetupPage() {
           tokenId ?? undefined,
           group || undefined,
           effectiveModels,
+          rebuild,
         );
         await refreshConnections();
         const success = outcome.binding.status === "ready";
@@ -284,6 +324,12 @@ export default function SetupPage() {
         });
       }
     } catch (value) {
+      setCanRebuild(
+        typeof value === "object" &&
+          value !== null &&
+          "kind" in value &&
+          value.kind === "parse",
+      );
       setOperation({
         ...state,
         title: "配置未完成",
@@ -321,7 +367,10 @@ export default function SetupPage() {
           setError(null);
           if (stage === "connect") navigate("/");
           else if (stage === "preview") setStage("model");
-          else if (stage === "model") setStage(tokenId ? "key" : "connect");
+          else if (stage === "model")
+            setStage(
+              automaticKey || selected?.kind === "api_key" ? "connect" : "key",
+            );
           else setStage("connect");
         }}
       >
@@ -376,6 +425,10 @@ export default function SetupPage() {
                 onValueChange={(id) => {
                   setConnectionId(id);
                   setDemo(false);
+                  setTokenId(null);
+                  setGroup("");
+                  setModel("");
+                  setSelectedModels([]);
                 }}
                 className="connection-list"
               >
@@ -419,24 +472,43 @@ export default function SetupPage() {
                   ? "添加站点连接"
                   : "登录 KunCode"}
               </Button>
-              {selected?.connected && (
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setDemo(false);
-                    setStage("key");
-                  }}
-                >
-                  使用此连接
-                  <ArrowRight />
-                </Button>
-              )}
+              {selected?.connected &&
+                (selected.kind === "api_key" ? (
+                  <Button onClick={startAutomatic}>
+                    使用此连接
+                    <ArrowRight />
+                  </Button>
+                ) : (
+                  <>
+                    <Button onClick={startAutomatic}>
+                      快速配置
+                      <ArrowRight />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setDemo(false);
+                        setAutomaticKey(false);
+                        setStage("key");
+                      }}
+                    >
+                      选择已有密钥
+                      <ArrowRight />
+                    </Button>
+                  </>
+                ))}
             </div>
+            {selected?.connected && selected.kind !== "api_key" && (
+              <p className="page-footnote">
+                快速配置会在确认后自动创建或复用专用密钥，并使用账户默认分组。
+              </p>
+            )}
             <Button
               variant="ghost"
               className="demo-entry"
               onClick={() => {
                 setDemo(true);
+                setAutomaticKey(false);
                 setModel(DEMO_MODELS[0].id);
                 setSelectedModels([DEMO_MODELS[0].id]);
                 setError(null);
@@ -531,6 +603,13 @@ export default function SetupPage() {
               </p>
             )}
             <div className="connection-entry">
+              <Button
+                variant="outline"
+                onClick={startAutomatic}
+                disabled={keyLoading}
+              >
+                自动创建专用密钥
+              </Button>
               <Button variant="outline" onClick={() => navigate("/keys")}>
                 管理密钥
               </Button>
@@ -549,6 +628,11 @@ export default function SetupPage() {
         )}
         {stage === "model" && (
           <form onSubmit={handlePreview}>
+            {automaticKey && (
+              <p className="page-footnote">
+                使用账户默认分组；确认配置后自动创建或复用专用密钥。
+              </p>
+            )}
             {modelLoading && (
               <p role="status">
                 <Loader2 className="animate-spin inline" />
@@ -683,17 +767,59 @@ export default function SetupPage() {
           setDemo(false);
           setTokenId(null);
           setGroup("");
-          setStage("key");
+          setModel("");
+          setSelectedModels([]);
+          setAutomaticKey(false);
+          setStage(connection.kind === "api_key" ? "model" : "connect");
         }}
       />
       <OperationDialog
         operation={operation}
+        actions={
+          canRebuild && operation?.phase === "error"
+            ? [
+                {
+                  label: "备份并重建配置",
+                  onClick: () => {
+                    setOperation(null);
+                    setRebuildOpen(true);
+                  },
+                },
+              ]
+            : undefined
+        }
         onClose={() => {
           const done = operation?.phase === "success";
           setOperation(null);
           if (done) navigate("/");
         }}
       />
+      <Dialog open={rebuildOpen} onOpenChange={setRebuildOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>重建 {agent.name} 配置</DialogTitle>
+            <DialogDescription>
+              该工具的原有设置和登录信息将被重置。程序会先保存完整备份，再写入当前选择的连接与模型。
+            </DialogDescription>
+          </DialogHeader>
+          <p className="page-footnote">
+            配置文件：{preview?.configPath ?? "该工具的用户级配置"}
+          </p>
+          <div className="setup-form-footer">
+            <Button variant="outline" onClick={() => setRebuildOpen(false)}>
+              取消
+            </Button>
+            <Button
+              onClick={() => {
+                setRebuildOpen(false);
+                void apply(true);
+              }}
+            >
+              确认备份并重建
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

@@ -33,7 +33,9 @@ export function ToolList({ management = false }: { management?: boolean }) {
       const outcome = await api.restoreToolConfig(agentId);
       await refreshConnections();
       await refresh();
-      toast.success(`已从备份恢复 ${outcome.restored.length} 个配置文件`);
+      toast.success(
+        `已恢复上一次完整配置${outcome.removed.length ? `，移除 ${outcome.removed.length} 个新增文件` : ""}`,
+      );
     } catch (value) {
       toast.error(errorMessage(value));
     }

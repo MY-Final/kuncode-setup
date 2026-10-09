@@ -13,6 +13,8 @@ import { AppShell } from "@/components/layout/app-shell";
 import HomePage from "@/pages/home";
 import KeysPage from "@/pages/keys";
 import ToolDetailPage from "@/pages/tool-detail";
+import DiagnosePage from "@/pages/diagnose";
+import { RebindDialog } from "@/components/rebind-dialog";
 import { PreferencesProvider } from "@/lib/preferences";
 import type {
   ConnectionSnapshot,
@@ -98,7 +100,8 @@ beforeEach(() => {
       snapshot.connections.push(other);
       return other;
     }
-    if (command === "connection_models") return ["server-model"];
+    if (command === "connection_models")
+      return ["server-model", "second-model"];
     if (command === "list_site_tokens")
       return [
         {
@@ -197,7 +200,7 @@ beforeEach(() => {
         message: "本机配置与站点密钥一致",
       };
     if (command === "restore_tool_config")
-      return { agentId: args.agentId, restored: [], missing: [] };
+      return { agentId: args.agentId, restored: [], missing: [], removed: [] };
     if (command === "rename_connection") {
       snapshot.connections = snapshot.connections.map((connection) =>
         connection.id === args.connectionId
@@ -325,8 +328,6 @@ it("真实配置使用服务器模型，预览不创建密钥，确认后才写�
   const user = userEvent.setup();
   await user.click(await screen.findByRole("radio", { name: /other.example/ }));
   await user.click(screen.getByRole("button", { name: "使用此连接" }));
-  await user.click(await screen.findByRole("radio", { name: /site-key/ }));
-  await user.click(screen.getByRole("button", { name: "使用此密钥" }));
   // 多选：默认勾选第一个模型，再手动勾选第二个。
   await user.click(
     await screen.findByRole("checkbox", { name: "second-model" }),
@@ -349,6 +350,224 @@ it("真实配置使用服务器模型，预览不创建密钥，确认后才写�
     "server-model",
     "second-model",
   ]);
+  expect(
+    native.invoke.mock.calls.some(
+      ([command]) => command === "list_site_tokens",
+    ),
+  ).toBe(false);
+});
+
+it("新账户快速配置跳过密钥管理，确认后才创建或复用专用密钥", async () => {
+  snapshot.connections.push(official);
+  const base = native.invoke.getMockImplementation();
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === "list_site_tokens") return [];
+    return base!(command, args);
+  });
+  render(
+    <AppProvider>
+      <MemoryRouter initialEntries={["/setup/codex"]}>
+        <Routes>
+          <Route path="/setup/:agent" element={<SetupPage />} />
+        </Routes>
+      </MemoryRouter>
+    </AppProvider>,
+  );
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "快速配置" }));
+  await screen.findByRole("checkbox", { name: "server-model" });
+  await user.click(await screen.findByRole("button", { name: "下一步" }));
+  expect(await screen.findByText("确认配置")).toBeInTheDocument();
+  expect(
+    native.invoke.mock.calls.some(([command]) =>
+      [
+        "list_site_tokens",
+        "create_site_token",
+        "apply_connection_config",
+      ].includes(command),
+    ),
+  ).toBe(false);
+  await user.click(screen.getByRole("button", { name: "配置 Codex" }));
+  expect(
+    await screen.findByRole("heading", { name: "Codex 配置完成" }),
+  ).toBeInTheDocument();
+  const args = native.invoke.mock.calls.find(
+    ([command]) => command === "apply_connection_config",
+  )![1];
+  expect(args.selection.tokenId).toBeNull();
+  expect(args.selection.group).toBeNull();
+});
+
+it("换绑返回配置异常时保留弹窗并显示错误，不触发成功回调", async () => {
+  snapshot.connections.push(official);
+  snapshot.bindings.codex = {
+    agentId: "codex",
+    connectionId: official.id,
+    model: "server-model",
+    group: "default",
+    tokenId: 7,
+    status: "ready",
+    verified: true,
+  };
+  const onDone = vi.fn();
+  const base = native.invoke.getMockImplementation();
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === "apply_connection_config")
+      return {
+        binding: { status: "error", verified: false },
+        steps: [
+          { step: "检查服务连接", status: "error", detail: "工具密钥无效" },
+        ],
+      };
+    return base!(command, args);
+  });
+  function Harness() {
+    const { agents, loading } = useApp();
+    return loading ? null : (
+      <RebindDialog
+        agent={agents[0]}
+        onOpenChange={() => undefined}
+        onDone={onDone}
+      />
+    );
+  }
+  render(
+    <AppProvider>
+      <Harness />
+    </AppProvider>,
+  );
+  const user = userEvent.setup();
+  const submit = await screen.findByRole("button", { name: "换绑密钥" });
+  await waitFor(() => expect(submit).toBeEnabled());
+  await user.click(submit);
+  expect(await screen.findByRole("alert")).toHaveTextContent("工具密钥无效");
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
+  expect(onDone).not.toHaveBeenCalled();
+});
+
+it("诊断不会把不支持模型列表的未验证连接显示为通过", async () => {
+  snapshot.connections.push(official);
+  snapshot.bindings.codex = {
+    agentId: "codex",
+    connectionId: official.id,
+    model: "server-model",
+    tokenId: 7,
+    status: "ready",
+    verified: false,
+  };
+  const base = native.invoke.getMockImplementation();
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === "probe_tool_connection")
+      return {
+        ok: false,
+        latencyMs: null,
+        message: "此站点不提供模型列表，实际调用尚未验证",
+      };
+    return base!(command, args);
+  });
+  render(
+    <AppProvider>
+      <DiagnosePage />
+    </AppProvider>,
+  );
+  const user = userEvent.setup();
+  const button = await screen.findByRole("button", { name: "检查模型列表" });
+  await waitFor(() => expect(button).toBeEnabled());
+  await user.click(button);
+  expect(await screen.findByText("未通过")).toBeInTheDocument();
+  expect(
+    native.invoke.mock.calls.some(
+      ([command]) => command === "test_tool_inference",
+    ),
+  ).toBe(false);
+});
+
+it("实际调用只在用户确认后执行，并显示 Streaming 测试结果", async () => {
+  snapshot.connections.push(official);
+  snapshot.bindings.codex = {
+    agentId: "codex",
+    connectionId: official.id,
+    model: "server-model",
+    tokenId: 7,
+    status: "ready",
+    verified: false,
+  };
+  const base = native.invoke.getMockImplementation();
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === "test_tool_inference")
+      return {
+        ok: true,
+        latencyMs: 1,
+        message: "默认模型实际调用及 Streaming 已通过",
+      };
+    return base!(command, args);
+  });
+  render(
+    <AppProvider>
+      <DiagnosePage />
+    </AppProvider>,
+  );
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "测试 Codex" }));
+  expect(
+    native.invoke.mock.calls.some(
+      ([command]) => command === "test_tool_inference",
+    ),
+  ).toBe(false);
+  await user.click(
+    within(screen.getByRole("dialog")).getByRole("button", {
+      name: "开始测试",
+    }),
+  );
+  expect(
+    await screen.findByText("默认模型实际调用及 Streaming 已通过"),
+  ).toBeInTheDocument();
+  expect(native.invoke).toHaveBeenCalledWith("test_tool_inference", {
+    agentId: "codex",
+  });
+});
+
+it("损坏配置仅在单独确认重建后才重置", async () => {
+  snapshot.connections.push(other);
+  const base = native.invoke.getMockImplementation();
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === "apply_connection_config" && !args.selection.rebuild) {
+      throw { kind: "parse", message: "原配置无法解析，文件未修改" };
+    }
+    return base!(command, args);
+  });
+  render(
+    <AppProvider>
+      <MemoryRouter initialEntries={["/setup/codex"]}>
+        <Routes>
+          <Route path="/setup/:agent" element={<SetupPage />} />
+        </Routes>
+      </MemoryRouter>
+    </AppProvider>,
+  );
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "使用此连接" }));
+  await screen.findByRole("checkbox", { name: "server-model" });
+  await user.click(screen.getByRole("button", { name: "下一步" }));
+  await user.click(await screen.findByRole("button", { name: "配置 Codex" }));
+  await user.click(
+    await screen.findByRole("button", { name: "备份并重建配置" }),
+  );
+  const calls = () =>
+    native.invoke.mock.calls.filter(
+      ([command]) => command === "apply_connection_config",
+    );
+  expect(calls()).toHaveLength(1);
+  expect(calls()[0][1].selection.rebuild).toBe(false);
+  expect(screen.getByRole("dialog")).toHaveTextContent(
+    "原有设置和登录信息将被重置",
+  );
+  await user.click(screen.getByRole("button", { name: "确认备份并重建" }));
+  expect(
+    await screen.findByRole("heading", { name: "Codex 配置完成" }),
+  ).toBeInTheDocument();
+  expect(calls()).toHaveLength(2);
+  expect(calls()[1][1].selection.rebuild).toBe(true);
 });
 
 it("首页 Dashboard 展示账户余额与工具配置进度", async () => {
