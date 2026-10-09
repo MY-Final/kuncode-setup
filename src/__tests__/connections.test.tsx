@@ -509,7 +509,9 @@ it("实际调用只在用户确认后执行，并显示 Streaming 测试结果",
     </AppProvider>,
   );
   const user = userEvent.setup();
-  await user.click(await screen.findByRole("button", { name: "测试 Codex" }));
+  await user.click(
+    await screen.findByRole("button", { name: "测试 Codex 实际调用" }),
+  );
   expect(
     native.invoke.mock.calls.some(
       ([command]) => command === "test_tool_inference",
@@ -1215,4 +1217,55 @@ it("已有工具可直接编辑高级模型配置，无需重新登录或创建�
       ),
     ),
   ).toBe(false);
+});
+
+it("逐工具实际调用结果独立显示，不覆盖模型列表检查", async () => {
+  snapshot.connections.push(other);
+  for (const id of ["claude", "opencode"])
+    snapshot.bindings[id] = {
+      agentId: id,
+      connectionId: other.id,
+      model: "server-model",
+      tokenId: null,
+      status: "ready",
+      verified: true,
+    };
+  const base = native.invoke.getMockImplementation()!;
+  native.invoke.mockImplementation(async (command, args) =>
+    command === "test_tool_inference"
+      ? {
+          ok: args.agentId === "claude",
+          latencyMs: 2,
+          message:
+            args.agentId === "claude"
+              ? "Claude 推理通过"
+              : "OpenCode 响应未完成",
+        }
+      : base(command, args),
+  );
+  render(
+    <AppProvider>
+      <DiagnosePage />
+    </AppProvider>,
+  );
+  const user = userEvent.setup();
+  const list = await screen.findByRole("button", { name: "检查模型列表" });
+  await waitFor(() => expect(list).toBeEnabled());
+  await user.click(list);
+  await screen.findByText(/Claude Code：已检查模型列表/);
+  for (const name of ["Claude Code", "OpenCode"]) {
+    await user.click(
+      screen.getByRole("button", { name: `测试 ${name} 实际调用` }),
+    );
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "开始测试",
+      }),
+    );
+    await screen.findByText(
+      name === "Claude Code" ? "Claude 推理通过" : "OpenCode 响应未完成",
+    );
+  }
+  expect(screen.getByText("Claude 推理通过")).toBeInTheDocument();
+  expect(screen.getByText(/Claude Code：已检查模型列表/)).toBeInTheDocument();
 });

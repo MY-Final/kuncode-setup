@@ -1218,6 +1218,41 @@
   font-size: 10px;
   padding: 0 8px;
 }
+.diagnostic-inference {
+  margin-top: 28px;
+}
+.diagnostic-section-heading {
+  margin-bottom: 14px;
+}
+.diagnostic-section-heading h2 {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.diagnostic-section-heading .page-footnote {
+  margin: 0;
+}
+.diagnostic-inference .diagnostic-copy p {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 300px;
+  margin-top: 4px;
+}
+.diagnostic-inference-item .diagnostic-row {
+  border-bottom: 0;
+}
+.diagnostic-inference-item {
+  border-bottom: 1px solid var(--border);
+}
+.diagnostic-test-result {
+  padding: 0 2px 13px 40px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
 .model-advanced {
   border-top: 1px solid var(--border);
   margin-top: 20px;
@@ -1317,6 +1352,18 @@
   .model-advanced > summary span {
     display: block;
     margin: 4px 0 0;
+  }
+  .diagnostic-inference .diagnostic-version {
+    display: none;
+  }
+  .diagnostic-inference .diagnostic-copy {
+    flex-basis: calc(100% - 40px);
+  }
+  .diagnostic-inference .diagnostic-api-action {
+    margin-left: auto;
+  }
+  .diagnostic-inference .diagnostic-status {
+    margin-left: 26px;
   }
 }
 

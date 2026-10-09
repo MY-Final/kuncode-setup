@@ -43,14 +43,18 @@ export default function DiagnosePage() {
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<TestResult | null>(null);
   const [inferenceAgent, setInferenceAgent] = useState<string | null>(null);
+  const [runningInference, setRunningInference] = useState<string | null>(null);
+  const [inferenceResults, setInferenceResults] = useState<
+    Record<string, TestResult>
+  >({});
   const [guide, setGuide] = useState<{
     name: string;
     guide: InstallGuide;
   } | null>(null);
   const tools = [...(environment?.tools ?? []), ...agents];
-  const configured = Object.keys(configurations).filter(
-    (id) => !configurations[id].demo,
-  );
+  const configured = agents
+    .map((agent) => agent.id)
+    .filter((id) => configurations[id] && !configurations[id].demo);
   async function detect() {
     setResult(null);
     await refresh();
@@ -244,23 +248,77 @@ export default function DiagnosePage() {
         </div>
       </section>
       {isTauri() && configured.length > 0 && (
-        <section className="connection-section" aria-label="实际调用测试">
-          <h2>测试实际调用</h2>
-          <p className="page-footnote">
-            向所选工具的默认模型发送一次短请求，验证实际调用和
-            Streaming；会消耗少量额度。
-          </p>
-          <div className="connection-entry">
-            {configured.map((id) => (
-              <Button
-                key={id}
-                variant="outline"
-                disabled={testing}
-                onClick={() => setInferenceAgent(id)}
-              >
-                测试 {agents.find((agent) => agent.id === id)?.name ?? id}
-              </Button>
-            ))}
+        <section className="diagnostic-inference" aria-label="实际调用测试">
+          <div className="diagnostic-section-heading">
+            <h2>实际调用测试</h2>
+            <p className="page-footnote">
+              验证默认模型的文本响应和 Streaming
+              完整性；每次测试会消耗少量额度。
+            </p>
+          </div>
+          <div className="diagnostic-list">
+            {configured.map((id) => {
+              const name = agents.find((agent) => agent.id === id)?.name ?? id;
+              const check = inferenceResults[id];
+              const running = runningInference === id;
+              const verified = check
+                ? check.ok
+                : configurations[id].inferenceVerified;
+              return (
+                <div className="diagnostic-inference-item" key={id}>
+                  <div className="diagnostic-row">
+                    <span className="diagnostic-tool-icon">
+                      <PlugZap />
+                    </span>
+                    <div className="diagnostic-copy">
+                      <h3>{name}</h3>
+                      <p title={configurations[id].model}>
+                        {configurations[id].model}
+                      </p>
+                    </div>
+                    <span
+                      className={cn(
+                        "diagnostic-status",
+                        verified ? "ok" : check ? "missing" : undefined,
+                      )}
+                    >
+                      {running
+                        ? "测试中"
+                        : verified
+                          ? "已通过"
+                          : check
+                            ? "未通过"
+                            : "尚未测试"}
+                    </span>
+                    <span className="diagnostic-version">
+                      {check?.latencyMs != null ? `${check.latencyMs} ms` : "—"}
+                    </span>
+                    <Button
+                      className="diagnostic-api-action"
+                      variant="outline"
+                      size="sm"
+                      disabled={testing}
+                      aria-label={`测试 ${name} 实际调用`}
+                      onClick={() => setInferenceAgent(id)}
+                    >
+                      {running && <RefreshCw className="animate-spin" />}
+                      测试实际调用
+                    </Button>
+                  </div>
+                  {check && (
+                    <p
+                      className={cn(
+                        "diagnostic-test-result",
+                        !check.ok && "text-destructive",
+                      )}
+                      role="status"
+                    >
+                      {check.message}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </section>
       )}
@@ -282,7 +340,10 @@ export default function DiagnosePage() {
           <DialogHeader>
             <DialogTitle>测试实际调用与 Streaming</DialogTitle>
             <DialogDescription>
-              向默认模型发送一次短请求，会消耗少量额度。模型响应内容不会保存。
+              向 {agents.find((agent) => agent.id === inferenceAgent)?.name}{" "}
+              的默认模型{" "}
+              {inferenceAgent ? configurations[inferenceAgent]?.model : ""}{" "}
+              发送一次短请求，会消耗少量额度。模型响应内容不会保存。
             </DialogDescription>
           </DialogHeader>
           <div className="setup-form-footer">
@@ -295,17 +356,25 @@ export default function DiagnosePage() {
                 const id = inferenceAgent;
                 setInferenceAgent(null);
                 setTesting(true);
-                setResult(null);
+                setRunningInference(id);
                 try {
-                  setResult(await testToolInference(id));
+                  const value = await testToolInference(id);
+                  setInferenceResults((previous) => ({
+                    ...previous,
+                    [id]: value,
+                  }));
                 } catch (value) {
-                  setResult({
-                    ok: false,
-                    latencyMs: null,
-                    message: errorMessage(value),
-                  });
+                  setInferenceResults((previous) => ({
+                    ...previous,
+                    [id]: {
+                      ok: false,
+                      latencyMs: null,
+                      message: errorMessage(value),
+                    },
+                  }));
                 } finally {
                   await refreshConnections().catch(() => undefined);
+                  setRunningInference(null);
                   setTesting(false);
                 }
               }}
